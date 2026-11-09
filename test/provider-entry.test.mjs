@@ -151,7 +151,7 @@ test("the only import web UI is Magpie's sandboxed page; old browser tickets are
   const h = await harness();
   try {
     assert.match(h.page, /data-entry="sidebar"/);
-    assert.match(h.page, /选择账号文件/);
+    assert.match(h.page, /批量导入账号/);
     const wrong = await fetch(h.base + "/ui?ticket=" + "f".repeat(48));
     assert.equal(wrong.status, 410);
     assert.equal((await h.api("preview", { text: "user@example.com----pw" }, "https://outside.example")).status, 403);

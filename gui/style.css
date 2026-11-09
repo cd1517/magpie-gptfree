@@ -141,3 +141,18 @@ footer { text-align: center; margin-top: 20px; color: var(--muted); font-size: 1
 
 .mode-card.disabled { opacity: .55; cursor: not-allowed }
 .mode-card.disabled:hover { border-color: var(--line) }
+
+/* Batch import form: keep the primary action inside the Magpie page. */
+.form-intro { color: var(--muted); font-size: 12px; margin: -4px 0 16px }
+.source-tabs { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); gap: 3px; padding: 4px; margin: 0 0 16px }
+.source-tab { border: 0; background: transparent; padding: 8px 17px; border-radius: 7px; color: var(--muted); font-size: 12px; font-weight: 650 }
+.source-tab.active { background: var(--card); color: var(--accent); box-shadow: 0 1px 4px #00000014 }
+.field-label { display: block; margin-bottom: 7px; font-size: 13px; font-weight: 650 }
+#pasteAccounts { display: block; width: 100%; min-height: 165px; resize: vertical; background: var(--bg); border: 1px solid var(--line); border-radius: 11px; padding: 13px 14px; color: var(--text); font: 12px/1.65 ui-monospace, "Cascadia Code", "Consolas", monospace; outline-offset: 3px }
+#pasteAccounts:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak) }
+#pasteAccounts::placeholder { color: var(--muted); opacity: .65 }
+#pastePanel .actions { margin-top: 14px }
+#filePanel { margin-top: 0 }
+.single-mode { grid-template-columns: 1fr }
+.single-mode .mode-card { cursor: default; background: var(--accent-weak) }
+.single-mode .mode-card:hover { border-color: var(--accent) }

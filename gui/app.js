@@ -64,6 +64,10 @@
     busy = next;
     $("selectFile").disabled = busy;
     $("fileInput").disabled = busy;
+    $("checkPaste").disabled = busy;
+    $("pasteAccounts").disabled = busy;
+    $("pasteTab").disabled = busy;
+    $("fileTab").disabled = busy;
     $("startButton").disabled = busy || !preview?.count || !!preview?.errors?.length || !$("consent").checked;
     document.querySelectorAll('input[name="mode"]').forEach((input) => input.disabled = busy);
     $("consent").disabled = busy;
@@ -108,34 +112,49 @@
     hidden("actionsBox", false);
     setBusy(false);
   }
+  async function previewText(text, sourceLabel = "粘贴内容") {
+    if (busy) return;
+    if (!text || !text.trim()) { notice("请先填写账号列表", true); return; }
+    if (new TextEncoder().encode(text).length > 1024 * 1024) {
+      notice("账号列表超过 1 MiB，请分批导入", true); return;
+    }
+    setBusy(true);
+    hidden("progressBox", true);
+    jobStates.clear();
+    preview = null;
+    try {
+      const data = await api("preview", { text });
+      preview = data;
+      renderValidation();
+      notice(sourceLabel + " 已解析，请检查脱敏预览，然后点击「导入并授权入池」");
+    } catch (err) {
+      hidden("previewBox", true);
+      hidden("actionsBox", true);
+      notice(err.message, true);
+    } finally { setBusy(false); }
+  }
   async function loadText(file) {
     if (busy) return;
     if (!file || file.size > 1024 * 1024) {
       notice("请选择小于 1 MiB 的 TXT 文件", true);
       return;
     }
-    if (!/\.(txt|csv)$/i.test(file.name) && file.type && file.type !== "text/plain") {
-      notice("请使用 TXT 文本文件", true);
+    if (!/\\.txt$/i.test(file.name) && file.type !== "text/plain") {
+      notice("请使用 TXT 文件", true);
       return;
     }
-    setBusy(true);
-    hidden("progressBox", true);
-    jobStates.clear();
-    preview = null;
     $("fileName").textContent = file.name + " · " + Math.ceil(file.size / 1024) + " KiB";
-    try {
-      let text = await file.text();
-      const data = await api("preview", { text });
-      // Only the backend draft keeps raw contents until the user starts.
-      text = "";
-      preview = data;
-      renderValidation();
-      notice("文件已安全解析；请检查账号格式并选择导入模式");
-    } catch (err) {
-      hidden("previewBox", true);
-      hidden("actionsBox", true);
-      notice(err.message, true);
-    } finally { setBusy(false); }
+    const text = await file.text();
+    await previewText(text, "TXT 文件");
+  }
+  function switchSource(mode) {
+    const paste = mode === "paste";
+    hidden("pastePanel", !paste);
+    hidden("filePanel", paste);
+    $("pasteTab").classList.toggle("active", paste);
+    $("fileTab").classList.toggle("active", !paste);
+    $("pasteTab").setAttribute("aria-selected", String(paste));
+    $("fileTab").setAttribute("aria-selected", String(!paste));
   }
   function addEvent(entry) {
     const div = el("div", "event");
@@ -208,11 +227,11 @@
     $("progressFill").style.width = "0%";
     try {
       const mode = document.querySelector('input[name="mode"]:checked')?.value || "pool";
-      await api("start", { mode, consent: true });
+      await api("start", { mode: "pool", consent: true });
       $("progressBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
       stopPolling();
       await status();
-      notice("已开始导入，请在出现登录页面时完成必要验证");
+      notice("已开始 DSH 风格后台 HTTP 登录；不会自动打开网页登录页，请在下方查看每条结果");
     } catch (err) {
       setBusy(false);
       hidden("progressBox", true);
@@ -290,6 +309,16 @@
     // OS file dialog; it never navigates the import form to a web tab.
     document.querySelectorAll(".tab").forEach((button) =>
       button.addEventListener("click", () => tab(button.dataset.tab)));
+    $("pasteTab").addEventListener("click", () => switchSource("paste"));
+    $("fileTab").addEventListener("click", () => switchSource("file"));
+    $("checkPaste").addEventListener("click", async () => {
+      if (busy) return;
+      // The raw value is cleared from the DOM after transfer to the short
+      // lived in-memory server draft; it is never persisted in the UI.
+      const text = $("pasteAccounts").value;
+      await previewText(text, "粘贴账号");
+      if (preview) $("pasteAccounts").value = "";
+    });
     $("selectFile").addEventListener("click", (event) => {
       event.stopPropagation(); $("fileInput").click();
     });
@@ -323,6 +352,8 @@
       stopPolling(); preview = null; jobStates.clear();
       hidden("previewBox", true); hidden("actionsBox", true);
       hidden("progressBox", true); $("fileName").textContent = "请重新选择一个 TXT 文件";
+      $("pasteAccounts").value = "";
+      switchSource("paste");
       $("cancelButton").textContent = "停止导入"; $("cancelButton").disabled = false;
       notice("可以导入下一批账号");
     });

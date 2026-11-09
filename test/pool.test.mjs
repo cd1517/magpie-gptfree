@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { upsertPool, listPool, removePool } from "../lib/pool-vault.mjs";
-import { verifyAccessToken, poolFetch, prepareCodexBody, CODEX_BASE } from "../lib/codex-pool.mjs";
+import { verifyAccessToken, poolFetch, prepareCodexBody, CODEX_BASE, renewAccount } from "../lib/codex-pool.mjs";
 import { runBatch } from "../lib/importer.mjs";
 import { GPTFreePoolPlugin } from "../index.mjs";
 
@@ -85,28 +85,20 @@ test("pool mode reuses live token without browser, falls back on rejected/expire
     `b@example.com----p2----${seed}----${expired}`,
   ].join("\n");
   const saved = [], states = [];
-  let browserOpened = 0, browserClosed = 0, logins = 0, nativeCalls = 0;
+  let logins = 0;
   const r = await runBatch({
     file: "virtual.txt", consent: true, mode: "pool",
     read: async () => content,
-    openBrowser: async () => {
-      browserOpened++;
-      return { close() { browserClosed++; } };
-    },
     verifyToken: async (token) => ({ accepted: token === reusable || token === "fresh-after-login" }),
     login: async () => { logins++; return { tokens: { access: "fresh-after-login", id: "id", refresh: "refresh" } }; },
     savePool: async (item) => { saved.push(item); },
-    importAccount: async () => { nativeCalls++; },
     onProgress: (event) => { states.push(event); },
   });
   assert.equal(r.mode, "pool");
   assert.equal(r.reused, 1);
   assert.equal(r.added, 2);
   assert.equal(r.tokenNeedsOAuth, 1);
-  assert.equal(browserOpened, 1);
-  assert.equal(browserClosed, 1);
   assert.equal(logins, 1);
-  assert.equal(nativeCalls, 0);
   assert.equal(saved.length, 2);
   assert.equal(saved[0].accessToken, reusable);
   assert.equal(saved[1].accessToken, "fresh-after-login");
@@ -115,19 +107,11 @@ test("pool mode reuses live token without browser, falls back on rejected/expire
   assert(!log.includes(reusable) && !log.includes(expired) && !log.includes(seed) && !log.includes("p1"));
 });
 
-test("native mode never falsely marks access-only JWT reused", async () => {
-  const token = jwt(3600);
-  const r = await runBatch({
+test("removed native Codex CLI import mode is rejected", async () => {
+  await assert.rejects(runBatch({
     file: "virtual.txt", consent: true, mode: "native",
-    read: async () => `a@example.com----pw----${seed}----${token}`,
-    openBrowser: async () => ({ close() {} }),
-    login: async () => ({ tokens: { access: "fresh", id: "id", refresh: "refresh" } }),
-    importAccount: async () => true,
-    verifyToken: () => { throw new Error("native mode must not probe access-only tokens"); },
-  });
-  assert.equal(r.added, 1);
-  assert.equal(r.reused, 0);
-  assert.equal(r.tokenNeedsOAuth, 1);
+    read: async () => `a@example.com----pw----${seed}`,
+  }), /Codex CLI/);
 });
 
 test("Responses payload is adapted for Codex backend and preserves tool input", () => {
@@ -178,4 +162,35 @@ test("pool plugin exposes provider and keyless sign-in", async () => {
   assert.equal(config.provider["gptfree-pool"].api, CODEX_BASE);
   assert.equal(config.provider["gptfree-pool"].npm, "@ai-sdk/openai");
   assert.equal(hooks.auth.methods.length, 1); assert.equal(hooks.auth.methods[0].type, "oauth"); // OAuth URL-less native OS file import
+});
+
+test("expired-token reauthentication uses the same DSH HTTP path, with no browser", async () => {
+  const old = { email: "renewed@example.com", password: "p", totp: seed, accessToken: jwt(-100) };
+  const saved = [];
+  let logins = 0;
+  const renewed = await renewAccount(old, {
+    authenticate: async (account) => {
+      logins++;
+      assert.equal(account.email, "renewed@example.com");
+      return { tokens: { access: "new-platform-token" } };
+    },
+    verify: async (token, opts) => {
+      assert.equal(token, "new-platform-token");
+      assert.equal(opts.expectedEmail, "renewed@example.com");
+      return { accepted: true };
+    },
+    save: async (record) => saved.push(record),
+  });
+  assert.equal(logins, 1);
+  assert.equal(saved.length, 1);
+  assert.equal(renewed.accessToken, "new-platform-token");
+});
+
+test("expired-token reauthentication refuses unverified Platform OAuth tokens", async () => {
+  const account = { email: "reject@example.com", password: "p", totp: seed, accessToken: jwt(-100) };
+  await assert.rejects(renewAccount(account, {
+    authenticate: async () => ({ tokens: { access: "platform-only" } }),
+    verify: async () => ({ accepted: false }),
+    save: async () => { throw Error("must not save rejected token"); },
+  }), /不能用于当前 Magpie 模型接口/);
 });

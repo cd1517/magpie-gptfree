@@ -18,7 +18,14 @@ jobs:
           node-version: "22"
       - name: Install dependencies
         run: npm install --ignore-scripts --no-audit --no-fund
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
       - name: Static syntax check
         run: npm run check
+      - name: Standalone DSH auth worker Python syntax and invalid-input smoke test
+        run: |
+          python -m compileall -q python
+          python python/auth_worker.py <<< '{"action":"not-authenticate"}' | grep -q '"invalid_input"'
       - name: Unit tests (no real accounts)
         run: npm test

@@ -1,7 +1,7 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { runBatch } from "../lib/importer.mjs";
-import { makePKCE, authorizationURL, codexAuthJSON } from "../lib/oauth.mjs";
+import { normalizeWorkerResult, loginHTTPAccount } from "../lib/dsh-http-auth.mjs";
 import { GPTFreePoolPlugin } from "../index.mjs";
 
 const seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
@@ -10,7 +10,7 @@ const jwt = (exp) => [
   Buffer.from(JSON.stringify({ exp })).toString("base64url"), "signature",
 ].join(".");
 
-test("dry run recognizes all 3 formats, without launching a browser", async () => {
+test("dry-run parses three import formats, without contacting upstream", async () => {
   const content = [
     `a@example.com----p1----${seed}`,
     `b@example.com---p2---${seed}---https://mail.xxx.store/abcd`,
@@ -18,16 +18,16 @@ test("dry run recognizes all 3 formats, without launching a browser", async () =
   ].join("\n");
   const result = await runBatch({
     file: "virtual.txt", dryRun: true, read: async () => content,
-    openBrowser: async () => { throw new Error("should not launch"); },
+    login: () => { throw Error("No authentication during dry-run"); },
   });
   assert.equal(result.total, 3);
   assert.deepEqual(result.ready.map((x) => x.kind), ["standard", "mail_link", "access_token"]);
   assert.equal(result.ready[2].tokenState, "unexpired_unverified");
-  assert.equal(JSON.stringify(result).includes("p3"), false);
-  assert.equal(JSON.stringify(result).includes("mail.xxx.store"), false);
+  assert(!JSON.stringify(result).includes("p3"));
+  assert(!JSON.stringify(result).includes("mail.xxx.store"));
 });
 
-test("batch handles links and access tokens without leaking sensitive content or falsely claiming reuse", async () => {
+test("all TXT records use the standalone DSH HTTP authentication path", async () => {
   const future = jwt(Math.floor(Date.now()/1000)+3600);
   const expired = jwt(Math.floor(Date.now()/1000)-3600);
   const secretLink = "https://mail.xxx.store/key---secret";
@@ -37,70 +37,98 @@ test("batch handles links and access tokens without leaking sensitive content or
     `c@example.com----password3----${seed}----${future}`,
     `d@example.com---password4---${seed}---${expired}`,
   ].join("\n");
-  let closed = false, count = 0;
-  const calls = [], states = [];
+  const calls = [], states = [], stored = [];
   const result = await runBatch({
     file: "virtual.txt", read: async () => content, consent: true,
-    openBrowser: async () => ({ close: async () => { closed = true; } }),
     login: async (account) => {
       calls.push(account.email);
-      return { tokens: { access: "a", refresh: "r", id: "i" } };
+      return { tokens: { access: "fresh", refresh: "r", id: "i" } };
     },
-    importAccount: async () => { count++; },
+    verifyToken: async (token) => ({ accepted: token === "fresh" }),
+    savePool: async (account) => { stored.push(account); },
     onProgress: (event) => states.push(event),
   });
   assert.equal(result.added, 4);
-  assert.equal(count, 4);
+  assert.equal(result.reused, 0);
   assert.equal(result.tokenNeedsOAuth, 2);
+  assert.equal(stored.length, 4);
   assert.deepEqual(result.formats, { standard: 1, mail_link: 1, access_token: 2 });
-  assert.equal(closed, true);
   assert.deepEqual(calls, ["a@example.com", "b@example.com", "c@example.com", "d@example.com"]);
   assert(states.some((x) => x.state === "mail_link_ignored"));
   assert(states.some((x) => x.state === "token_needs_oauth"));
   assert(states.some((x) => x.state === "token_expired"));
   const printed = JSON.stringify(states);
-  for (const x of ["password1", "secretLink", secretLink, future, expired, seed])
-    assert.equal(printed.includes(x), false);
+  for (const x of ["password1", secretLink, future, expired, seed])
+    assert(!printed.includes(x));
 });
 
-test("single failure does not discard later records", async () => {
+test("one failed HTTP account does not discard the next one or leak exceptions", async () => {
   const txt = [`a@example.com----p----${seed}`, `b@example.com----p----${seed}`].join("\n");
-  const r = await runBatch({
+  const result = await runBatch({
     file: "virtual.txt", read: async () => txt, consent: true,
-    openBrowser: async () => ({ close() {} }),
     login: async (account) => {
-      if (account.email === "a@example.com") throw new Error("token=secret-in-exception");
-      return { tokens: { access: "a", refresh: "r", id: "i" } };
+      if (account.email === "a@example.com") throw Error("token=secret-in-exception");
+      return { tokens: { access: "fresh", refresh: "r", id: "i" } };
     },
-    importAccount: async () => true,
+    verifyToken: async () => ({ accepted: true }),
+    savePool: async () => {},
   });
-  assert.equal(r.added, 1);
-  assert.equal(r.failed.length, 1);
-  assert.equal(JSON.stringify(r).includes("secret-in-exception"), false);
+  assert.equal(result.added, 1);
+  assert.equal(result.failed.length, 1);
+  assert(!JSON.stringify(result).includes("secret-in-exception"));
 });
 
-test("PKCE URL targets Codex with state, code challenge, and no password", () => {
-  const p = makePKCE();
-  assert.notEqual(p.verifier, p.challenge);
-  const url = new URL(authorizationURL({ ...p, email: "a@example.com" }));
-  assert.equal(url.hostname, "auth.openai.com");
-  assert.equal(url.searchParams.get("state"), p.state);
-  assert.equal(url.searchParams.get("code_challenge"), p.challenge);
-  assert.equal(url.searchParams.get("login_hint"), "a@example.com");
-  assert.equal(url.href.includes("password"), false);
+test("DSH Platform token is not falsely marked usable without model verification", async () => {
+  const txt = `a@example.com----pw----${seed}`;
+  const stored = [];
+  const result = await runBatch({
+    file: "virtual.txt", read: async () => txt, consent: true,
+    login: async () => ({ tokens: { access: "platform-token", id: "", refresh: "r" } }),
+    verifyToken: async () => ({ accepted: false, reason: "status_401" }),
+    savePool: async (item) => stored.push(item),
+  });
+  assert.equal(result.added, 0);
+  assert.equal(result.failed.length, 1);
+  assert.equal(stored.length, 0);
+  assert.match(result.failed[0].reason, /Platform Token/);
 });
 
-test("Codex auth.json includes native refresh and id token", () => {
-  const obj = codexAuthJSON({ access: "a", refresh: "r", id: "not-a-jwt" });
-  assert.equal(obj.auth_mode, "chatgpt");
-  assert.equal(obj.tokens.refresh_token, "r");
-  assert.equal(obj.tokens.id_token, "not-a-jwt");
+test("Codex CLI mode is disabled", async () => {
+  await assert.rejects(runBatch({
+    file: "virtual.txt", mode: "native", read: async () => "a@example.com----pw",
+  }), /已移除 Codex CLI/);
 });
 
-test("Magpie provider is independent from the GUI file import flow", async () => {
+test("DSH worker response is normalized and failures reject", async () => {
+  assert.deepEqual(normalizeWorkerResult('{"ok":true,"access_token":"platform","refresh_token":"r"}'),
+    { access: "platform", refresh: "r", id: "" });
+  assert.throws(() => normalizeWorkerResult('{"ok":false,"error":"bad_password"}'), /bad_password/);
+  assert.throws(() => normalizeWorkerResult("not json"), /无效数据/);
+});
+
+test("bridge sends login credentials through stdin, not process argv", async () => {
+  let command, args, options;
+  const result = await loginHTTPAccount({
+    email: "a@example.com", password: "never-in-argv", totp: seed,
+  }, {
+    python: async () => "/private/python",
+    worker: async (binary, parameters, opts) => {
+      command = binary; args = parameters; options = opts;
+      return '{"ok":true,"access_token":"platform-token"}';
+    },
+  });
+  assert.equal(command, "/private/python");
+  assert.equal(args.length, 1);
+  assert(!JSON.stringify(args).includes("never-in-argv"));
+  assert.equal(JSON.parse(options.input).password, "never-in-argv");
+  assert.equal(result.tokens.access, "platform-token");
+});
+
+test("Magpie provider still exposes its native in-app import entry", async () => {
   const plug = await GPTFreePoolPlugin();
   const config = { provider: {} };
   await plug.config(config);
   assert("gptfree-pool" in config.provider);
-  assert.equal(plug.auth.methods.length, 1); assert.equal(plug.auth.methods[0].type, "oauth"); // OS file selection runs inside Magpie
+  assert.equal(plug.auth.methods.length, 1);
+  assert.equal(plug.auth.methods[0].type, "oauth");
 });

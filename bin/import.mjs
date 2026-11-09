@@ -11,15 +11,14 @@ const showHelp = () => {
   node bin/import.mjs --file accounts.txt --i-own-these-accounts
 
 可选：
-  --magpie "C:\\path\\to\\magpie.exe"    指定 Magpie CLI
   --proxy http://127.0.0.1:7890        指定可信的 HTTP(S) 代理
   --dry-run                            只检查 TXT 格式（不登录）
-  --mode pool|native                   pool=短期 Token 号池（默认）；native=原生 Codex 导入
+  --mode pool                          仅支持独立 HTTP Token 号池（默认）
   --i-own-these-accounts               确认账号归属/管理权
   --help                               查看帮助
 
 TXT 格式：邮箱----密码----Base32 TOTP密钥；没有 2FA 可仅填邮箱----密码。
-注：浏览器中需要手动完成的验证码/额外验证不会被自动绕过。
+注：本版本沿用 DSH 后台 HTTP 密码 + TOTP 授权，不打开登录浏览器；额外上游验证可能导致该账号授权失败。
 `);
 };
 if (args.includes("--help") || args.includes("-h")) { showHelp(); process.exit(0); }
@@ -30,7 +29,6 @@ else {
   try {
     const result = await runBatch({
       file,
-      magpie: get("--magpie") || "magpie",
       mode: get("--mode") || "pool",
       proxy: get("--proxy") || "",
       dryRun: args.includes("--dry-run"),

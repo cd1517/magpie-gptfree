@@ -48,13 +48,16 @@ test("Magpie GUI manifest points to a real page and a loopback service", async (
 test("GUI serves a real page plus assets without exposing secrets", async () => {
   const h = await harness();
   try {
-    assert(h.html.includes("选择账号文件"));
-    assert(h.html.includes("开始批量导入"));
+    assert(h.html.includes("批量导入账号"));
+    assert(h.html.includes("导入并授权入池"));
     assert(!h.html.includes(seed));
     assert(h.html.includes("gptfree-session"));
     const asset = await fetch(h.base + "assets/app.js");
     assert.equal(asset.status, 200);
-    assert((await asset.text()).includes("fileInput"));
+    const app = await asset.text();
+    assert(app.includes("fileInput"));
+    assert(app.includes("pasteAccounts"));
+    assert(app.includes("checkPaste"));
     assert(!h.html.includes("localStorage"));
   } finally { await h.close(); }
 });
@@ -227,28 +230,23 @@ test("GUI auto-connects Magpie after successful pool import, no separate login",
   } finally { await h.close(); }
 });
 
-test("native and failed pool imports do not auto-connect independent pool", async () => {
-  for (const mode of ["native", "pool"]) {
-    let linked = 0;
-    const h = await harness({
-      onPoolChange: async () => { linked++; return { connected: true }; },
-      batch: async () => ({
-        total: 1, added: mode === "native" ? 1 : 0,
-        reused: 0, failed: mode === "pool" ? [{}] : [],
-      }),
-    });
-    try {
-      await h.api("preview", { text: `owner@example.com----pass----${seed}` });
-      await h.api("start", { mode, consent: true });
-      for (let i = 0; i < 40; i++) {
-        const state = (await h.api("status")).json;
-        if (state.state === "completed") {
-          assert.equal(state.providerConnected, null);
-          break;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 15));
-      }
-      assert.equal(linked, 0);
-    } finally { await h.close(); }
-  }
+test("only DSH HTTP pool import is exposed by GUI and failed batch cannot connect", async () => {
+  const h = await harness({
+    onPoolChange: async () => { throw Error("should not connect"); },
+    batch: async () => ({ total: 1, added: 0, reused: 0, failed: [{}] }),
+  });
+  try {
+    await h.api("preview", { text: `owner@example.com----pass----${seed}` });
+    assert.equal((await h.api("start", { mode: "native", consent: true })).status, 400);
+    const started = await h.api("start", { mode: "pool", consent: true });
+    assert.equal(started.status, 202);
+    let state;
+    for (let i = 0; i < 40; i++) {
+      state = (await h.api("status")).json;
+      if (state.state === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    assert.equal(state.providerConnected, null);
+    assert.equal(state.result.added, 0);
+  } finally { await h.close(); }
 });

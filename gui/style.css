@@ -138,3 +138,6 @@ footer { text-align: center; margin-top: 20px; color: var(--muted); font-size: 1
 @media (prefers-reduced-motion: reduce) {
   .dropzone, #progressFill { transition: none }
 }
+
+.mode-card.disabled { opacity: .55; cursor: not-allowed }
+.mode-card.disabled:hover { border-color: var(--line) }

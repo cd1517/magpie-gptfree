@@ -286,6 +286,17 @@
     if (next === "pool") loadPool();
   }
   function setup() {
+    if (document.body.dataset.entry === "provider") {
+      // The Providers sign-in only controls the GPTFree *pool*.
+      // Native Codex import is a separate built-in account provider.
+      const native = document.querySelector('input[name="mode"][value="native"]');
+      if (native) {
+        native.disabled = true;
+        native.closest(".mode-card")?.classList.add("disabled");
+        native.closest(".mode-card")?.append(el("small", "muted", "如需导入 Magpie 原生 Codex，请使用左侧 Plugins → GPTFree 账号导入"));
+      }
+      notice("已从 GPTFree 供应商进入。选择 TXT 并导入成功后，Magpie 将自动完成连接，无需再点击登录。");
+    }
     document.querySelectorAll(".tab").forEach((button) =>
       button.addEventListener("click", () => tab(button.dataset.tab)));
     $("selectFile").addEventListener("click", (event) => {

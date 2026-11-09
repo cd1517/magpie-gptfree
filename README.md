@@ -7,13 +7,15 @@
 ## GUI 安装与使用
 
 1. 打开 Magpie 桌面版的 **Plugins（插件）** 页面，点击 **Add a plugin（添加插件）**，输入 `https://github.com/yang0/magpie-gptfree`，或选择已下载的本仓库文件夹。启用插件。
-2. 在左侧 **Plugins** 分组中点击 **GPTFree 账号导入**。这是独立页面，不是要求输入 TXT 路径的登录表单。
+2. **两种入口都支持 GUI，不需要另外登录：**
+   - 在 **Providers → 添加供应商 → 来自插件 → GPTFree Codex Pool** 中点击 GPTFree。插件提供唯一的「打开 GPTFree 图形界面导入账号」方式，Magpie 会在浏览器打开本机 GUI。完成第一个账号导入后，这个供应商登录流程自动完成。
+   - 或者在 Magpie 左侧 **Plugins → GPTFree 账号导入** 直接打开内嵌 GUI。这种方式无需经过 Providers 登录页，导入成功后自动连接号池。
 3. **点击「选择文件」或拖入 TXT 文件**。页面自动解析最多 100 条账号，展示掩码邮箱、三/四字段类型、JWT 过期状态、重复项和格式错误。明文密码、TOTP 和 Token 均不显示。
 4. 选择 **独立 Token 号池**（默认）或 **原生 Codex 导入**，勾选账号归属确认，点击 **开始批量导入**。
 5. 查看每条账号的状态、成功数、复用数、失败原因。支持 **停止导入**。使用「我的账号池」查看和移除独立池的账号。
-6. **无需单独点击「登录」或「启用号池」**：选择 Token 号池模式时，任意账号成功授权入池，插件就会自动把 `gptfree-pool` 连接到 Magpie；成功后直接在 Agent 里选择实际验证可用的模型。原生 Codex 模式则会自动导入 Magpie 原生账号列表。
+6. **无需另外填写账号密码、API Key 或点击第二次「登录/启用」**：选择 Token 号池模式时，任意账号成功授权入池，插件就会自动把 `gptfree-pool` 连接到 Magpie；成功后直接在 Agent 里选择实际验证可用的模型。原生 Codex 模式则会自动导入 Magpie 原生账号列表。
 
-> GUI 页面由 Magpie 插件服务运行在本机 `127.0.0.1:37986`，不要求另开终端导入。首次使用需要插件主机能启动服务，并且设备已装 Chrome / Edge 供正常的交互式 OAuth 登录。尚未在真实 Windows Magpie + 真实账号上完成端到端验证，请先用少量自有测试账号。
+> GUI 页面由 Magpie 插件服务运行在本机 `127.0.0.1:37986`，不要求另开终端导入。从 Providers 进入时 GUI 会在本机浏览器打开；从 Plugins 左侧进入时是 Magpie 内嵌 GUI。首次使用需要插件主机能启动服务，并且设备已装 Chrome / Edge 供正常的交互式 OAuth 登录。尚未在真实 Windows Magpie + 真实账号上完成端到端验证，请先用少量自有测试账号。
 
 ## 支持的账号格式
 
@@ -64,7 +66,7 @@ npm test
 
 高级 CLI 仍保留在 `bin/import.mjs`，但不再是常规导入入口。
 
-**登录是导入流程的一部分**：只有在官方提示额外安全验证时需要操作登录窗口。不会再出现单独的 GPTFree 号池「登录」按钮。
+**登录是导入流程的一部分**：只有在官方提示额外安全验证时需要操作登录窗口。Providers 的 GPTFree 入口提供的是「打开 GUI 导入账号」方法，不再显示「插件没有提供登录方式」，不需要第二次启动账号池登录。
 
 开发记录：[GUI Issue #3](https://github.com/yang0/magpie-gptfree/issues/3) · [原账号池 Issue #1](https://github.com/yang0/magpie-gptfree/issues/1)。
 

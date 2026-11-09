@@ -18,7 +18,7 @@ test("empty local pool has no provider sign-in and no separate login method", as
   const connect = createPoolConnector(h.client, { poolRead: async () => [] });
   assert.deepEqual(await connect.sync(), { connected: false, count: 0 });
   assert.equal(h.saved.size, 0);
-  assert.deepEqual((await GPTFreePoolPlugin()).auth.methods, []);
+  assert.equal((await GPTFreePoolPlugin()).auth.methods[0].type, "oauth");
 });
 
 test("existing pool reconnects to Magpie automatically with a non-secret marker", async () => {

@@ -46,9 +46,35 @@ export const GPTFreePoolPlugin = async () => ({
   auth: {
     provider: "gptfree-pool",
     maxConcurrency: 2,
-    // No interactive "log in / enable" step: the GUI import registers
-    // this provider by client.auth.set when it successfully writes the pool.
-    methods: [],
+    single: true,
+    // Magpie's Providers page REQUIRES a sign-in method for an unsigned
+    // provider. This single method opens our GUI; it never asks for
+    // email/password/2FA or a standalone API key here. GUI import itself
+    // performs OAuth and activates the pool as soon as an account succeeds.
+    methods: [{
+      type: "oauth",
+      label: "打开 GPTFree 图形界面导入账号",
+      async authorize(_inputs, { signal } = {}) {
+        const service = await startGuiServer({ port: GUI_PORT });
+        const entry = service.issueProviderEntry();
+        return {
+          url: entry.url,
+          method: "auto",
+          instructions: "在打开的 GPTFree 图形界面中选择 TXT 文件并点击「开始批量导入」。首次成功入池后 Magpie 将自动完成此步骤，不需要另外登录。",
+          async callback(_code, { signal: callbackSignal } = {}) {
+            const outcome = await entry.wait({ signal: callbackSignal || signal });
+            if (!outcome.ok) {
+              return { type: "failed", error: outcome.error || "导入尚未完成，请在 GPTFree GUI 中查看详细状态" };
+            }
+            return {
+              type: "success",
+              key: POOL_MARKER,
+              metadata: { accountId: "GPTFree local pool" },
+            };
+          },
+        };
+      },
+    }],
     async loader(getAuth) {
       const auth = await getAuth();
       if (auth?.type !== "api") return {};

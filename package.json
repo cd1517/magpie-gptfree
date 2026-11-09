@@ -1,7 +1,7 @@
 {
   "name": "magpie-gptfree",
-  "version": "0.2.1",
-  "description": "Magpie GUI batch ChatGPT login and token pool, with automatic provider connection",
+  "version": "0.2.2",
+  "description": "Magpie GUI ChatGPT import with Providers tile opening the secure GUI and auto-activating the account pool",
   "type": "module",
   "main": "./index.mjs",
   "bin": {

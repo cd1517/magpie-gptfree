@@ -177,5 +177,5 @@ test("pool plugin exposes provider and keyless sign-in", async () => {
   await hooks.config(config);
   assert.equal(config.provider["gptfree-pool"].api, CODEX_BASE);
   assert.equal(config.provider["gptfree-pool"].npm, "@ai-sdk/openai");
-  assert.deepEqual(hooks.auth.methods, []); // no separate login button
+  assert.equal(hooks.auth.methods.length, 1); assert.equal(hooks.auth.methods[0].type, "oauth"); // no separate login button
 });

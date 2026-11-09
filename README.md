@@ -2,7 +2,7 @@
 
 **Magpie 窗口内的账号导入表单**，支持选择或拖入 TXT 直接填入可编辑文本框、按行预览与修正、跳过错误行、多批次追加、批量检测/刷新以及多账号自动轮询与故障转移。无需终端操作、不单独打开 GPTFree 导入网页，不依赖 DSH 插件或服务。
 
-> 开发分支 `feat/dsh-http-auth`（计划 v0.4.0）：正在把 DSH 的纯 HTTP 密码/TOTP 登录移植为独立 Python worker。**代码和模拟测试不代表真实 OpenAI 账号已完成端到端验收。** 请勿把 Platform OAuth 获取成功等同于 Magpie Codex 模型可用。
+> 当前版本 v0.5.0：基于独立 Python HTTP worker（DSH 风格密码/TOTP 认证）移植实现。**代码和模拟测试不代表真实 OpenAI 账号已完成端到端验收。** 请勿把 Platform OAuth 获取成功等同于 Magpie Codex 模型可用。
 
 ## 一、用户界面
 
@@ -11,7 +11,7 @@
 1. 在同一页面点击「**选择 TXT 文件**」或拖入文件（文件内容会直接填入下方的可编辑文本框），也可直接粘贴多行凭证。
 2. 点击「**检查账号格式**」，查看脱敏账号预览、格式类型与逐行错误提示；若部分行格式错误，可直接在文本框里编辑修正，或勾选「**跳过格式错误行，仅导入有效账号**」。
 3. 可选填本批登录使用的 HTTP(S) 代理，勾选授权确认后点击「**导入并授权入池**」；插件后台处理 DSH 风格 HTTP 密码 + TOTP 登录，不启动 Playwright，也不自动打开浏览器。
-4. 可多次批量追加导入（单批最多 100 条，本地加密号池累计支持 1000 个账号），并在「**我的账号池**」查看每个脱敏账号的 Token 状态、单独或全部检测/刷新授权。请求时自动在号池中所有有效账号间轮询，并在 401/429 时自动故障转移或重新授权。
+4. 可多次批量追加导入（单批最多 100 条，本地加密号池累计支持 1000 个账号），并在「**我的账号池**」查看每个脱敏账号的 Token 状态、单独/全部检测刷新授权或一键「**同步到 Providers**」。成功入池的每个账号都会独立注册为 Magpie Providers 里的可勾选账号（支持设为首选、单独启用/禁用及按账号优先级路由，并在 401/429 时自动故障转移到号池其余有效账号）。
 
 **支持的文本格式**（每行一条，分隔符兼容 `----` 与 `---`）：
 
@@ -25,13 +25,19 @@
 
 **不要提交真实凭证 TXT 到 GitHub，也不要把账号密码/2FA/JWT 粘贴到公开聊天记录。** GUI 预览仅返回掩码邮箱；凭证在后台内存草稿短时保存，成功账号在本机加密号池内保存。
 
-## 二、Providers 登录入口与内嵌页的区别
+## 二、Providers 登录入口与多账号同步机制
 
-Magpie 的 **Providers → GPTFree** 使用 Magpie 内置的 `auth.methods[].prompts` 登录弹窗。该官方接口只支持逐项 `select`、`text`、`password`，目前**不能直接插入任意 HTML 多行输入框、文件上传组件和完整进度表格**。因此那里先显示原生「选择 TXT 导入 / 使用已有号池」表单，同时插件在 Providers 行菜单通过 `magpie.actions` 提供了 **「GPTFree 批量导入 / 号池管理」** 直达入口。
+Magpie 的 **Providers → 来自插件 → GPTFree Codex Pool** 使用 Magpie 内置的 `auth.methods[].prompts` 登录表单，现在提供 3 种导入方式：
 
-Magpie 的 `client.auth.set()` 对后台插件仅同步单个 Provider 槽位（`gptfree-pool`），多账号能力由本插件加密号池统一管理并自动同步数量标签（例如 `GPTFree 号池 (N 个账号)`），在 gateway 请求期间自动对所有已入池账号执行轮询与故障转移。
+1. **从 TXT 文件批量导入账号**：调用系统文件选择器选定 TXT；首个有效账号入池后立即完成登录，其余账号在后台逐个入池并自动注册为 Providers 里的独立账号；若 TXT 存在格式错误（除非选择「自动跳过格式错误行」），文件内容会先安全暂存到内存草稿，提示你打开左侧 **Plugins → GPTFree 账号导入** 在文本框内直接编辑改错。
+2. **选择 TXT 并预加载到「GPTFree 账号导入」文本框编辑**：先选中本地 TXT 文件并自动载入 **Plugins → GPTFree 账号导入** 的可编辑文本框，方便改完格式再导入。
+3. **同步本机已有 GPTFree 账号池到 Providers（全部账号）**：若你已在内嵌页导入多账号，点击此项可将本机号池中的所有有效账号一次性同步到 Magpie Providers 列表。
 
-完整的批量账号编辑表单在 **Magpie 左侧 Plugins → GPTFree 账号导入**，是真正内嵌于 Magpie 的插件页，使用 `magpie.page` 与 `magpie.page.service`，实现方式参考社区 [magpie-chat](https://github.com/Magiczerowxy/magpie-chat)。不会单开 GPTFree 导入管理网页。
+多账号能力实现机制：
+
+- Magpie 的 `auth.single` 已取消限制；插件会为本机加密号池里的**每一个有效账号**分配独立槽位（首个沿用 `gptfree-pool`，其余使用 `gptfree-pool#s<hash>`）并设置脱敏展示名（如 `al***@example.com · 1a2b3c4d`）与 `metadata.poolSlot`，避免全部折叠成单一 `API key …l-v1` 条目。
+- 选中某个账号时，请求会优先路由到对应账号并在 401/429/5xx 时自动向同号池其余账号故障转移。
+- 由于 Magpie 官方 `prompts` 接口不支持直接嵌入任意 HTML 多行文本框，完整的文本框预览与实时导入进度表放在 **Magpie 左侧 Plugins → GPTFree 账号导入**（基于 `magpie.page` 与 `magpie.page.service`），也可通过 Providers 行菜单的 **「GPTFree 批量导入 / 号池管理」** 直达。
 
 ## 三、后台认证实现（与 DSH 独立）
 

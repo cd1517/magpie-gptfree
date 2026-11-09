@@ -8,6 +8,7 @@ import {
   verifyAccessToken, poolFetch, prepareCodexBody, CODEX_BASE,
   renewAccount, discoverPoolModels, refreshPoolAccount,
 } from "../lib/codex-pool.mjs";
+import { accountSlotTag, buildSlotAuthBody } from "../lib/pool-connection.mjs";
 import { runBatch } from "../lib/importer.mjs";
 import { GPTFreePoolPlugin } from "../index.mjs";
 
@@ -191,6 +192,68 @@ test("discoverPoolModels renews expired multi-account pool and skips failed acco
     },
   });
   assert.deepEqual(Object.keys(models), ["gpt-6"]);
+});
+
+test("preferredSlot tries the selected Magpie account first in poolFetch and discoverPoolModels, then fails over", async () => {
+  const accountA = { email: "alpha@example.com", password: "p", totp: seed, accessToken: jwt(3600, "alpha@example.com") };
+  const accountB = { email: "beta@example.com", password: "p", totp: seed, accessToken: jwt(3600, "beta@example.com") };
+  const slotB = accountSlotTag(accountB.email);
+
+  // 1. poolFetch hits preferred accountB first
+  const directAuths = [];
+  const okRes = await poolFetch(CODEX_BASE + "/responses",
+    { body: '{"model":"gpt-6","input":"hi"}', method: "POST" },
+    {
+      read: async () => [accountA, accountB],
+      preferredSlot: slotB,
+      fetcher: async (_url, init) => {
+        directAuths.push(init.headers.get("authorization"));
+        return new Response("data: ok\n\n", { status: 200 });
+      },
+    });
+  assert.equal(okRes.status, 200);
+  assert.deepEqual(directAuths, ["Bearer " + accountB.accessToken]);
+
+  // 2. When preferred accountB returns 429, poolFetch fails over to accountA
+  const failoverAuths = [];
+  const failoverRes = await poolFetch(CODEX_BASE + "/responses",
+    { body: '{"model":"gpt-6","input":"hi"}', method: "POST" },
+    {
+      read: async () => [accountA, accountB],
+      preferredSlot: slotB,
+      fetcher: async (_url, init) => {
+        const auth = init.headers.get("authorization");
+        failoverAuths.push(auth);
+        return auth === "Bearer " + accountB.accessToken
+          ? new Response("rate limited", { status: 429 })
+          : new Response("data: failover\n\n", { status: 200 });
+      },
+    });
+  assert.equal(failoverRes.status, 200);
+  assert.deepEqual(failoverAuths, [
+    "Bearer " + accountB.accessToken,
+    "Bearer " + accountA.accessToken,
+  ]);
+
+  // 3. discoverPoolModels probes preferred slot first
+  const probeOrder = [];
+  const catalog = await discoverPoolModels({
+    read: async () => [accountA, accountB],
+    preferredSlot: slotB,
+    fetcher: async (_url, opts) => {
+      probeOrder.push(opts.headers.get("authorization"));
+      return okModels();
+    },
+  });
+  assert.deepEqual(Object.keys(catalog), ["gpt-6"]);
+  assert.deepEqual(probeOrder, ["Bearer " + accountB.accessToken]);
+
+  // 4. GPTFreePoolPlugin wires auth.metadata.poolSlot cleanly into loader & models without throwing
+  const plug = await GPTFreePoolPlugin();
+  const authBodyB = buildSlotAuthBody(accountB.email);
+  const loaderOpts = await plug.auth.loader(async () => authBodyB);
+  assert.equal(typeof loaderOpts.fetch, "function");
+  assert.deepEqual(await plug.provider.models({}, {}), {});
 });
 
 test("refreshPoolAccount checks valid tokens and renews expired ones without leaking secrets", async () => {

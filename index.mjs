@@ -1,21 +1,46 @@
 /**
  * Standalone Magpie GUI and token-pool providers.
  * GUI entry runs in the plugin-host and serves its own sandboxed page.
- * Import is initiated with Magpie Plugins -> GPTFree Account Import.
+ * Import is initiated via Plugins -> GPTFree 账号导入 or Providers -> GPTFree.
  */
 import { CODEX_BASE, discoverPoolModels, poolFetch } from "./lib/codex-pool.mjs";
 import { GUI_PORT, startGuiServer } from "./lib/gui-service.mjs";
-import { createPoolConnector, POOL_MARKER } from "./lib/pool-connection.mjs";
+import { createPoolConnector, POOL_MARKER, POOL_PROVIDER } from "./lib/pool-connection.mjs";
 import { nativeImportMethod } from "./lib/provider-native-signin.mjs";
+
+let sharedClient = null;
+let sharedConnector = null;
+let sharedActiveKey = null;
+
+function ensurePoolConnector(ctx) {
+  if (typeof ctx?.magpie?.account === "function") {
+    sharedActiveKey = () => String(ctx.magpie.account(POOL_PROVIDER) || "");
+  }
+  if (typeof ctx?.client?.auth?.set === "function" &&
+      typeof ctx?.client?.auth?.remove === "function") {
+    if (!sharedConnector || sharedClient !== ctx.client) {
+      sharedClient = ctx.client;
+      sharedConnector = createPoolConnector(ctx.client, {
+        getActiveKey: () => (sharedActiveKey ? sharedActiveKey() : ""),
+      });
+    }
+  }
+  return sharedConnector;
+}
+
+function slotFromAuth(auth) {
+  const slot = auth?.metadata?.poolSlot;
+  return typeof slot === "string" && /^s[0-9a-f]{6,16}$/i.test(slot) ? slot : "";
+}
 
 export const GPTFreeGuiPlugin = async (ctx, options) => {
   const raw = options?.port ?? GUI_PORT;
   const port = Number(raw);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
     throw new Error("GPTFree GUI: invalid service port");
-  const connection = createPoolConnector(ctx.client);
+  const connection = ensurePoolConnector(ctx) || createPoolConnector(ctx.client);
   await startGuiServer({ port, onPoolChange: () => connection.sync() });
-  // Restore Magpie's non-secret local-pool connection automatically after
+  // Restore Magpie's per-account local-pool slots automatically after
   // restarting. A corrupt vault must not make the GUI inaccessible.
   try {
     await connection.sync();
@@ -29,43 +54,51 @@ export const GPTFreeGuiPlugin = async (ctx, options) => {
 };
 
 /**
- * Separate, access-only account pool mode.
- * A JWT is admitted only after Codex /models validates it. A token with no
- * refresh token is not a permanent login: on expiry the plugin attempts
- * normal browser OAuth (including user-driven security challenges).
+ * Separate, multi-account access-token pool mode.
+ * Every admitted vault account is synchronized to its own Magpie Providers
+ * account row, allowing individual selection, preferred routing, and failover.
  */
-export const GPTFreePoolPlugin = async () => ({
-  config: async (cfg) => {
-    cfg.provider ??= {};
-    cfg.provider["gptfree-pool"] ??= {
-      name: "GPTFree Codex Pool (standalone)",
-      npm: "@ai-sdk/openai",
-      api: CODEX_BASE,
-      models: {},
-    };
-  },
-  auth: {
-    provider: "gptfree-pool",
-    maxConcurrency: 2,
-    single: true,
-    // Native Magpie file chooser; never opens an importer website.
-    // The full preview/progress GUI stays in the in-app Plugins page.
-    methods: [nativeImportMethod()],
-    async loader(getAuth) {
-      const auth = await getAuth();
-      if (auth?.type !== "api") return {};
-      return {
-        baseURL: CODEX_BASE,
-        apiKey: POOL_MARKER,
-        fetch: (input, init) => poolFetch(input, init),
+export const GPTFreePoolPlugin = async (ctx = {}) => {
+  const connector = ensurePoolConnector(ctx);
+  return {
+    config: async (cfg) => {
+      cfg.provider ??= {};
+      cfg.provider[POOL_PROVIDER] ??= {
+        name: "GPTFree Codex Pool (standalone)",
+        npm: "@ai-sdk/openai",
+        api: CODEX_BASE,
+        models: {},
       };
     },
-  },
-  provider: {
-    id: "gptfree-pool",
-    async models(_provider, { auth } = {}) {
-      if (auth?.type !== "api") return {};
-      return discoverPoolModels();
+    auth: {
+      provider: POOL_PROVIDER,
+      maxConcurrency: 2,
+      // Native Magpie prompt & file chooser; never opens an external website.
+      // Multi-account management stays enabled so every pooled account gets its
+      // own toggleable row in Magpie Providers.
+      methods: [nativeImportMethod({
+        ...(connector ? { server: () => startGuiServer({ port: GUI_PORT, onPoolChange: () => sharedConnector?.sync() }) } : {}),
+        syncPool: () => sharedConnector?.sync(),
+        claimSlotKey: (slot, key) => sharedConnector?.claimKey(slot, key),
+        activeKey: () => (sharedActiveKey ? sharedActiveKey() : ""),
+      })],
+      async loader(getAuth) {
+        const auth = await getAuth();
+        if (auth?.type !== "api") return {};
+        const preferredSlot = slotFromAuth(auth);
+        return {
+          baseURL: CODEX_BASE,
+          apiKey: POOL_MARKER,
+          fetch: (input, init) => poolFetch(input, init, { preferredSlot }),
+        };
+      },
     },
-  },
-});
+    provider: {
+      id: POOL_PROVIDER,
+      async models(_provider, { auth } = {}) {
+        if (auth?.type !== "api") return {};
+        return discoverPoolModels({ preferredSlot: slotFromAuth(auth) });
+      },
+    },
+  };
+};

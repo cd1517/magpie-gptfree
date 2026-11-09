@@ -14,7 +14,7 @@
       <div class="brand">
         <span class="brand-icon">G</span>
         <div><div class="brand-title">GPTFree <span class="light-title">多账号号池导入与管理</span></div>
-          <div class="brand-sub">Magpie 独立插件 · 本地加密号池 · 自动轮询故障转移</div></div>
+          <div class="brand-sub">Magpie 独立插件 · 本地加密号池 · 每个账号独立入驻 Providers</div></div>
       </div>
       <span class="secure-pill"><span class="status-dot"></span> 本地运行</span>
     </header>
@@ -22,7 +22,7 @@
       <section class="hero">
         <div class="eyebrow">BATCH ACCOUNT POOL</div>
         <h1>批量导入 ChatGPT 账号</h1>
-        <p>选择 TXT 文件或直接粘贴多行账号进入下方编辑框，可随时修改格式异常行；所有入池账号会在请求时自动轮询与故障转移。</p>
+        <p>选择 TXT 文件或直接粘贴多行账号进入下方编辑框，可随时编辑修正格式异常行；所有入池账号会分别同步到 Magpie Providers 供多账号轮询与故障转移。</p>
       </section>
       <div class="tabs" role="tablist" aria-label="功能">
         <button type="button" role="tab" class="tab active" aria-selected="true" data-tab="import">批量导入</button>
@@ -109,11 +109,12 @@
           <h2>我的多账号池</h2>
           <div class="pool-actions">
             <button id="refreshAllPool" type="button" class="btn primary small">全部检测 / 刷新授权</button>
+            <button id="syncProviders" type="button" class="btn secondary small">同步到 Providers</button>
             <button id="refreshAccounts" type="button" class="btn secondary small">刷新列表</button>
             <button id="goImport" type="button" class="btn secondary small">+ 继续批量导入</button>
           </div>
         </div>
-        <p class="muted tiny">已入池的多个账号会在请求时自动轮询并在 401/429 时自动切换；即使之前导入时过期或失败，也可以随时重检/续期或继续追加更多账号。</p>
+        <p class="muted tiny">每个入池账号都会分别同步到 Magpie Providers 成为独立可勾选账号（支持设为首选与独立并发）；若在 Providers 误删了条目，可点「同步到 Providers」立即恢复。</p>
         <div class="pool-toolbar">
           <div id="poolSummary" class="pool-summary">加载中…</div>
           <input id="poolProxyInput" type="url" class="pool-proxy" spellcheck="false" autocomplete="off" aria-label="刷新用代理地址" placeholder="刷新代理（可选）如 http://127.0.0.1:7890">

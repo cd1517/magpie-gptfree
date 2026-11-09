@@ -10,6 +10,9 @@
     }
     await magpie.ready;
     const options = await magpie.options.get();
+    if (!pendingAction) {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
     const port = Number(options?.port) || 37986;
     if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
       throw new Error("插件端口不合法");

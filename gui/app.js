@@ -33,7 +33,7 @@
     mail_link_ignored: "邮箱链接已识别",
     failed: "授权失败",
   };
-  let preview = null, previewSource = "", lastSeq = 0, polling = null, busy = false, poolBusy = false;
+  let preview = null, previewSource = "", lastSeq = 0, polling = null, busy = false, poolBusy = false, checkingDraft = false;
   const jobStates = new Map();
   const rowMessages = new Map();
 
@@ -238,8 +238,9 @@
         const added = info.result?.added ?? info.added ?? 0;
         const failed = info.result?.failed ?? info.failed ?? 0;
         const skipped = info.result?.invalid ?? 0;
+        const providerCount = info.providerCount ?? added;
         if (info.providerConnected === true)
-          notice(`导入完成：新增/更新 ${added} 个账号进入共享号池（失败 ${failed}${skipped ? `，已跳过错误行 ${skipped}` : ""}），多账号自动轮询已就绪`);
+          notice(`导入完成：本次新增/更新 ${added} 个账号（失败 ${failed}${skipped ? `，已跳过错误行 ${skipped}` : ""}），当前已有 ${providerCount} 个账号独立入驻 Magpie Providers`);
         else if (info.providerConnected === false)
           notice(info.message || "账号已入池，但连接 Magpie 号池失败；请检查插件状态", true);
         else
@@ -290,7 +291,7 @@
       $("progressBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
       stopPolling();
       await status();
-      notice("已开始 DSH 风格后台 HTTP 批量登录；成功入池的多个账号将自动加入共享号池轮询");
+      notice("已开始 DSH 风格后台 HTTP 批量登录；成功账号将逐个独立同步到 Magpie Providers 供多账号使用");
     } catch (err) {
       setBusy(false);
       hidden("progressBox", true);
@@ -334,15 +335,54 @@
       $("refreshAllPool").disabled = false;
     }
   }
+  async function syncProvidersNow() {
+    if (poolBusy || busy) return;
+    poolBusy = true;
+    if ($("syncProviders")) $("syncProviders").disabled = true;
+    $("refreshAllPool").disabled = true;
+    try {
+      const res = await api("sync", {});
+      await loadPool();
+      if (res.connected)
+        notice(`已将 ${res.count} 个账号分别同步到 Magpie Providers，可在 Providers 中独立勾选、设为首选与轮询`);
+      else
+        notice("当前号池暂无可用账号，已清理 Providers 中的空号池条目");
+    } catch (err) {
+      notice(err.message, true);
+    } finally {
+      poolBusy = false;
+      if ($("syncProviders")) $("syncProviders").disabled = false;
+      $("refreshAllPool").disabled = !$("poolList")?.querySelector(".account-row");
+    }
+  }
+  async function loadPendingDraft() {
+    if (busy || checkingDraft) return;
+    checkingDraft = true;
+    try {
+      const draft = await api("draft");
+      if (!draft?.hasDraft || typeof draft.text !== "string" || busy) return;
+      tab("import");
+      $("pasteAccounts").value = draft.text;
+      $("fileName").textContent = (draft.filename || "accounts.txt") + "（来自 Providers 预加载，可直接在下方编辑修正）";
+      updateLineCounter();
+      await previewText(draft.text, "来自 Providers 的 TXT 文件");
+      $("pasteAccounts").focus();
+    } catch {
+      // Ignore transient errors when polling pending drafts.
+    } finally {
+      checkingDraft = false;
+    }
+  }
   async function loadPool() {
     try {
       const data = await api("accounts");
       $("poolCount").textContent = data.total;
       const summary = data.summary || { total: data.total, valid: 0, needsRenew: 0 };
       $("poolSummary").textContent = data.total
-        ? `共 ${summary.total} 个入池账号 · 有效 ${summary.valid} · 待续期/异常 ${summary.needsRenew} · 多账号自动轮询中`
+        ? `共 ${summary.total} 个入池账号 · 有效 ${summary.valid} · 待续期/异常 ${summary.needsRenew} · 已独立注册到 Providers`
         : "号池暂无账号 · 请先导入账号";
       $("refreshAllPool").disabled = poolBusy || !data.accounts.length;
+      if ($("syncProviders")) $("syncProviders").disabled = poolBusy;
       const list = $("poolList");
       list.replaceChildren();
       if (!data.accounts.length) {
@@ -353,14 +393,14 @@
         const item = el("div", "account-row");
         const left = el("div", "account-main");
         const head = el("div", "account-head");
-        head.append(el("strong", "", account.email));
+        head.append(el("strong", "", account.slotLabel || account.email));
         const badge = poolTokenBadges[account.tokenState] || (account.hasAccess
           ? poolTokenBadges.unexpired_unverified
           : poolTokenBadges.missing);
         head.append(el("span", "pill " + badge.cls, badge.text));
         left.append(head);
         const sub = [formatTime(account.updatedAt), rowMessages.get(account.id)].filter(Boolean).join(" · ");
-        left.append(el("small", "", sub || "已纳入共享号池轮询 · Token 无明文显示"));
+        left.append(el("small", "", sub || "已在 Providers 独立入驻 · 轮询与故障转移就绪 · Token 无明文显示"));
         item.append(left);
         const controls = el("div", "account-buttons");
         const refresh = el("button", "btn secondary small", "检测/刷新");
@@ -490,12 +530,23 @@
     });
     $("refreshAccounts").addEventListener("click", loadPool);
     $("refreshAllPool").addEventListener("click", () => refreshAccounts({ all: true }));
+    $("syncProviders")?.addEventListener("click", syncProvidersNow);
+    window.addEventListener("focus", () => { loadPendingDraft(); });
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) loadPendingDraft();
+    });
     window.addEventListener("message", (ev) => {
-      if (ev.data?.magpie === 1 && ev.data?.event === "action") {
+      if (ev.data?.magpie !== 1) return;
+      if (ev.data?.event === "visibility" && ev.data?.data?.visible === true) {
+        loadPendingDraft();
+        return;
+      }
+      if (ev.data?.event === "action") {
         const id = ev.data?.data?.id;
         if (id === "manage-pool") tab("pool");
         else if (id === "batch-import") {
           tab("import");
+          loadPendingDraft();
           $("pasteAccounts").focus();
         }
       }
@@ -504,6 +555,7 @@
     else if (location.hash === "#action=batch-import") $("pasteAccounts").focus();
     updateLineCounter();
     setBusy(false);
+    loadPendingDraft();
     loadPool();
     status();
   }

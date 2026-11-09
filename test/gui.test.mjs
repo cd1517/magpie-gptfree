@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createGuiService, GUI_PORT } from "../lib/gui-service.mjs";
-import { readFile } from "node:fs/promises";
+import { accountSlotTag, formatAccountSlotLabel } from "../lib/pool-connection.mjs";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { GPTFreeGuiPlugin } from "../index.mjs";
 
 const seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
@@ -56,6 +59,7 @@ test("GUI serves a real page with editable TXT-to-textarea flow and no secrets o
     assert(h.html.includes("proxyInput"));
     assert(h.html.includes("clearPaste"));
     assert(h.html.includes("refreshAllPool"));
+    assert(h.html.includes("syncProviders"));
     assert(!h.html.includes(seed));
     assert(h.html.includes("gptfree-session"));
     const asset = await fetch(h.base + "assets/app.js");
@@ -67,6 +71,9 @@ test("GUI serves a real page with editable TXT-to-textarea flow and no secrets o
     assert(app.includes('$("pasteAccounts").value = text'));
     assert(!app.includes('$("pasteAccounts").value = ""') || app.includes("clearPaste"));
     assert(app.includes("accounts/refresh"));
+    assert(app.includes("syncProviders"));
+    assert(app.includes('api("draft")'));
+    assert(app.includes('api("sync"'));
     assert(!h.html.includes("localStorage"));
     assert(!app.includes("localStorage"));
   } finally { await h.close(); }
@@ -235,6 +242,8 @@ test("GUI lists, refreshes and removes accounts using opaque ids, not raw emails
     assert.equal(listed.json.total, 2);
     assert.deepEqual(listed.json.summary, { total: 2, valid: 1, needsRenew: 1 });
     assert.equal(listed.json.accounts[0].email, "al***@example.com");
+    assert.equal(listed.json.accounts[0].slotLabel, formatAccountSlotLabel("alice@example.com"));
+    assert.equal(listed.json.accounts[0].slotTag, accountSlotTag("alice@example.com"));
     assert.equal(listed.json.accounts[0].tokenState, "unexpired_unverified");
     assert.equal(listed.json.accounts[1].tokenState, "expired");
     const opaque = listed.json.accounts[0].id;
@@ -302,5 +311,82 @@ test("only DSH HTTP pool import is exposed by GUI and failed batch cannot connec
     }
     assert.equal(state.providerConnected, null);
     assert.equal(state.result.added, 0);
+  } finally { await h.close(); }
+});
+
+test("GUI GET /api/draft enforces auth/origin, omits secrets from /ui HTML, and consumes one-shot", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "magpie-gui-draft-"));
+  const file = join(dir, "accounts.txt");
+  const secretTxt = `bad-line\nowner@example.com----topsecretpass----${seed}`;
+  await writeFile(file, secretTxt, { mode: 0o600 });
+  const h = await harness();
+  try {
+    const info = await h.service.stageDraft(file);
+    assert.equal(info.filename, "accounts.txt");
+    assert.equal(info.count, 1);
+    assert.equal(info.errors, 1);
+
+    // /ui HTML must not embed draft text or secrets
+    const pageHtml = await (await fetch(h.base + "ui")).text();
+    assert(!pageHtml.includes("topsecretpass"));
+    assert(!pageHtml.includes("owner@example.com"));
+    assert(!pageHtml.includes(seed));
+
+    // Security checks on /api/draft
+    assert.equal((await h.api("draft", undefined, { bearer: "0".repeat(64) })).status, 403);
+    assert.equal((await h.api("draft", undefined, { origin: "https://attacker.test" })).status, 403);
+
+    // First valid GET consumes draft; second returns hasDraft: false
+    const first = await h.api("draft");
+    assert.equal(first.status, 200);
+    assert.equal(first.json.hasDraft, true);
+    assert.equal(first.json.filename, "accounts.txt");
+    assert.equal(first.json.text, secretTxt);
+    assert.equal(first.json.validCount, 1);
+    assert.equal(first.json.errorCount, 1);
+
+    const second = await h.api("draft");
+    assert.equal(second.status, 200);
+    assert.equal(second.json.hasDraft, false);
+  } finally {
+    await h.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("GUI POST /api/sync and multi-account start progressively synchronize Providers", async () => {
+  let syncCalls = 0;
+  const h = await harness({
+    onPoolChange: async () => {
+      syncCalls++;
+      return { connected: true, count: 2 };
+    },
+    batch: async (args) => {
+      args.onProgress({ state: "added", line: 1, email: "a1***@example.com" });
+      args.onProgress({ state: "added", line: 2, email: "a2***@example.com" });
+      return { total: 2, added: 2, reused: 0, failed: [] };
+    },
+  });
+  try {
+    assert.equal((await h.api("sync", {}, { origin: "https://attacker.test" })).status, 403);
+    const manualSync = await h.api("sync", {});
+    assert.equal(manualSync.status, 200);
+    assert.deepEqual(manualSync.json, { synced: true, connected: true, count: 2 });
+    assert.equal(syncCalls, 1);
+
+    syncCalls = 0;
+    const twoAccounts = `a1@example.com----pw1----${seed}\na2@example.com----pw2----${seed}`;
+    await h.api("preview", { text: twoAccounts });
+    assert.equal((await h.api("start", { mode: "pool", consent: true })).status, 202);
+    let state;
+    for (let i = 0; i < 40; i++) {
+      state = (await h.api("status")).json;
+      if (state.state === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    assert.equal(state.state, "completed");
+    assert.equal(state.providerConnected, true);
+    assert.equal(state.providerCount, 2);
+    assert.equal(syncCalls >= 2, true);
   } finally { await h.close(); }
 });

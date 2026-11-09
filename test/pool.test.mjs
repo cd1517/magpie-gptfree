@@ -1,0 +1,181 @@
+import { strict as assert } from "node:assert";
+import { test } from "node:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { upsertPool, listPool, removePool } from "../lib/pool-vault.mjs";
+import { verifyAccessToken, poolFetch, prepareCodexBody, CODEX_BASE } from "../lib/codex-pool.mjs";
+import { runBatch } from "../lib/importer.mjs";
+import { GPTFreePoolPlugin } from "../index.mjs";
+
+const seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+function jwt(delta, email = "a@example.com") {
+  return [
+    Buffer.from('{"alg":"RS256","typ":"JWT"}').toString("base64url"),
+    Buffer.from(JSON.stringify({
+      exp: Math.floor(Date.now() / 1000) + delta, email,
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct123" },
+    })).toString("base64url"),
+    "signature",
+  ].join(".");
+}
+
+function okModels() {
+  return new Response(JSON.stringify({
+    models: [
+      { slug: "gpt-6", display_name: "GPT 6", visibility: "list", context_window: 123456 },
+      { slug: "not-listed", visibility: "hide" },
+    ],
+  }), { status: 200, headers: { "content-type": "application/json" } });
+}
+
+test("vault keeps sensitive fields encrypted, updates and removes records", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptfree-test-"));
+  try {
+    const record = { email: "a@example.com", password: "super-secret-password",
+      totp: seed, accessToken: jwt(3600) };
+    await upsertPool(record, { root });
+    const rows = await listPool({ root });
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].password, "super-secret-password");
+    assert.equal(rows[0].totp, seed);
+    const encrypted = await readFile(join(root, "pool.enc.json"), "utf8");
+    assert.equal(encrypted.includes("super-secret-password"), false);
+    assert.equal(encrypted.includes(seed), false);
+    assert.equal(encrypted.includes(rows[0].accessToken), false);
+    await upsertPool({ ...record, password: "second-secret" }, { root });
+    assert.equal((await listPool({ root })).length, 1);
+    assert.equal((await listPool({ root }))[0].password, "second-secret");
+    assert.equal((await removePool("a@example.com", { root })).removed, 1);
+    assert.equal((await listPool({ root })).length, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("unexpired JWT is only admitted after real Codex model probe", async () => {
+  let requested = "";
+  const token = jwt(3600);
+  const success = await verifyAccessToken(token, {
+    expectedEmail: "a@example.com",
+    fetcher: async (url, opts) => {
+      requested = url;
+      assert.equal(opts.headers.get("authorization"), "Bearer " + token);
+      assert.equal(opts.headers.get("chatgpt-account-id"), "acct123");
+      assert.equal(opts.redirect, "error");
+      return okModels();
+    },
+  });
+  assert(success.accepted);
+  assert(requested.endsWith("/models?client_version=0.164.0"));
+  assert.deepEqual(Object.keys(success.models), ["gpt-6"]);
+  assert.equal(success.models["gpt-6"].limit.context, 123456);
+  assert.equal((await verifyAccessToken(jwt(-100), { fetcher: () => {
+    throw new Error("Should not contact server for expired token");
+  } })).accepted, false);
+  assert.equal((await verifyAccessToken(token, { expectedEmail: "someone-else@example.com",
+    fetcher: () => { throw new Error("should not contact server"); } })).reason, "identity_mismatch");
+  assert.equal((await verifyAccessToken(token, { fetcher: async () =>
+    new Response("{}", { status: 401 }) })).accepted, false);
+});
+
+test("pool mode reuses live token without browser, falls back on rejected/expired", async () => {
+  const reusable = jwt(3600, "a@example.com");
+  const expired = jwt(-3600, "b@example.com");
+  const content = [
+    `a@example.com----p1----${seed}----${reusable}`,
+    `b@example.com----p2----${seed}----${expired}`,
+  ].join("\n");
+  const saved = [], states = [];
+  let browserOpened = 0, browserClosed = 0, logins = 0, nativeCalls = 0;
+  const r = await runBatch({
+    file: "virtual.txt", consent: true, mode: "pool",
+    read: async () => content,
+    openBrowser: async () => {
+      browserOpened++;
+      return { close() { browserClosed++; } };
+    },
+    verifyToken: async (token) => ({ accepted: token === reusable || token === "fresh-after-login" }),
+    login: async () => { logins++; return { tokens: { access: "fresh-after-login", id: "id", refresh: "refresh" } }; },
+    savePool: async (item) => { saved.push(item); },
+    importAccount: async () => { nativeCalls++; },
+    onProgress: (event) => { states.push(event); },
+  });
+  assert.equal(r.mode, "pool");
+  assert.equal(r.reused, 1);
+  assert.equal(r.added, 2);
+  assert.equal(r.tokenNeedsOAuth, 1);
+  assert.equal(browserOpened, 1);
+  assert.equal(browserClosed, 1);
+  assert.equal(logins, 1);
+  assert.equal(nativeCalls, 0);
+  assert.equal(saved.length, 2);
+  assert.equal(saved[0].accessToken, reusable);
+  assert.equal(saved[1].accessToken, "fresh-after-login");
+  assert(states.some((event) => event.state === "token_reused"));
+  const log = JSON.stringify(states);
+  assert(!log.includes(reusable) && !log.includes(expired) && !log.includes(seed) && !log.includes("p1"));
+});
+
+test("native mode never falsely marks access-only JWT reused", async () => {
+  const token = jwt(3600);
+  const r = await runBatch({
+    file: "virtual.txt", consent: true, mode: "native",
+    read: async () => `a@example.com----pw----${seed}----${token}`,
+    openBrowser: async () => ({ close() {} }),
+    login: async () => ({ tokens: { access: "fresh", id: "id", refresh: "refresh" } }),
+    importAccount: async () => true,
+    verifyToken: () => { throw new Error("native mode must not probe access-only tokens"); },
+  });
+  assert.equal(r.added, 1);
+  assert.equal(r.reused, 0);
+  assert.equal(r.tokenNeedsOAuth, 1);
+});
+
+test("Responses payload is adapted for Codex backend and preserves tool input", () => {
+  const raw = { model: "gpt-6", input: [{ type: "message", role: "system", id: "some-id",
+    content: [{ type: "input_text", text: "hello" }] }],
+    stream: false, store: true, temperature: 0.8, max_output_tokens: 4000 };
+  const b = JSON.parse(prepareCodexBody(raw));
+  assert.equal(b.store, false);
+  assert.equal(b.stream, true);
+  assert.equal(b.temperature, undefined);
+  assert.equal(b.max_output_tokens, undefined);
+  assert.equal(b.input[0].role, "developer");
+  assert.equal(b.input[0].id, undefined);
+  assert(b.include.includes("reasoning.encrypted_content"));
+});
+
+test("pool request uses local vault token and fails over when one account rate limits", async () => {
+  const account1 = { email: "a@example.com", password: "p", totp: seed, accessToken: jwt(3600) };
+  const account2 = { email: "b@example.com", password: "p", totp: seed, accessToken: jwt(3600, "b@example.com") };
+  const used = [];
+  const f = async (url, init) => {
+    assert.equal(url, CODEX_BASE + "/responses");
+    assert.equal(init.redirect, "error");
+    assert.equal(init.headers.get("OpenAI-Beta"), "responses=experimental");
+    const auth = init.headers.get("authorization");
+    used.push(auth);
+    return used.length === 1 ? new Response("limited", { status: 429 }) :
+      new Response("data: done\n\n", { status: 200 });
+  };
+  const response = await poolFetch(CODEX_BASE + "/responses",
+    { body: '{"model":"gpt-6","input":"hi"}', method: "POST" },
+    { read: async () => [account1, account2], fetcher: f });
+  assert.equal(response.status, 200);
+  assert.equal(used.length, 2);
+  assert.notEqual(used[0], used[1]);
+  assert.equal(await response.text(), "data: done\n\n");
+});
+
+test("pool rejects exfiltration URLs before sending credentials", async () => {
+  await assert.rejects(poolFetch("https://attacker.invalid/v1/responses",
+    { body: '{}' }, { read: async () => [] }), /only forwards/);
+});
+
+test("pool plugin exposes provider and keyless sign-in", async () => {
+  const hooks = await GPTFreePoolPlugin();
+  const config = { provider: {} };
+  await hooks.config(config);
+  assert.equal(config.provider["gptfree-pool"].api, CODEX_BASE);
+  assert.equal(config.provider["gptfree-pool"].npm, "@ai-sdk/openai");
+  assert.equal(hooks.auth.methods[0].keyless, true);
+});

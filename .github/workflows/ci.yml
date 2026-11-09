@@ -1,0 +1,24 @@
+name: Standalone Magpie GPTFree plugin
+
+on:
+  push:
+    branches: ["main", "feat/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+      - name: Static syntax check
+        run: npm run check
+      - name: Unit tests (no real accounts)
+        run: npm test

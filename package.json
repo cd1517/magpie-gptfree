@@ -1,0 +1,37 @@
+{
+  "name": "magpie-gptfree",
+  "version": "0.1.0",
+  "description": "Standalone ChatGPT/Codex account batch importer for Magpie",
+  "type": "module",
+  "main": "./index.mjs",
+  "bin": {
+    "magpie-gptfree": "./bin/import.mjs"
+  },
+  "files": [
+    "index.mjs",
+    "lib",
+    "bin",
+    "README.md",
+    "test"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "check": "node --check index.mjs && node --check bin/import.mjs && node --check lib/oauth.mjs && node --check lib/login.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "^1.57.0"
+  },
+  "keywords": [
+    "magpie",
+    "opencode",
+    "opencode-plugin",
+    "chatgpt",
+    "codex",
+    "auth",
+    "batch-import"
+  ],
+  "license": "MIT"
+}

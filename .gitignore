@@ -1,0 +1,19 @@
+# Never commit owner account files or generated local credentials.
+accounts*.txt
+account*.txt
+credentials*.txt
+*.auth.json
+pool.enc.json
+master.key
+*.enc.json
+.env
+.env.*
+*.secret
+*.secrets
+
+# Runtime and tests
+node_modules/
+playwright-report/
+test-results/
+*.log
+.DS_Store

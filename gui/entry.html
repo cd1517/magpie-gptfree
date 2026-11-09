@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GPTFree 账号导入</title>
+  <script src="_magpie/bridge.js"></script>
+  <script src="entry.js" defer></script>
+  <style>
+    body { font: 14px/1.65 system-ui,sans-serif; display:grid; place-content:center; min-height:80vh; text-align:center; }
+    .pulse { display:block; margin:0 auto 15px; width:25px; height:25px; border:2px solid #7775; border-top-color:#4796eb; border-radius:50%; animation:spin .9s linear infinite }
+    @keyframes spin { to { transform:rotate(360deg) } }
+    p { color:var(--magpie-muted,GrayText) }
+  </style>
+</head>
+<body>
+  <main>
+    <span class="pulse" aria-hidden="true"></span>
+    <h2>GPTFree 账号导入</h2>
+    <p id="state">正在连接本地安全导入服务…</p>
+  </main>
+</body>
+</html>

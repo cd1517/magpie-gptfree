@@ -1,123 +1,69 @@
-# magpie-gptfree
+# Magpie GPTFree · GUI 账号批量导入插件
 
-**独立的 Magpie ChatGPT/Codex TXT 批量导入插件，支持三段式 2FA、接码邮箱链接和第四字段 JWT access_token。** 完全不依赖 DSH，也不会调用 DSH 后端。
+**无需命令行导入账号。** 在 [Magpie](https://github.com/yetone/magpie) 的 **Plugins → GPTFree 账号导入** 页面直接选择 TXT 文件、预览脱敏账号、选择导入模式、开始任务、观察逐行进度，并管理本地号池。
 
-有两种使用模式：
+本仓库完全独立，不依赖 DSH，也不调用任何 DSH API。只用于用户自己拥有或获准管理的账号。
 
-| 模式 | 对应 Magpie Provider | 说明 |
-| --- | --- | --- |
-| **Token 号池（默认）** | `gptfree-pool` | 有效 JWT 优先经 Codex 服务验证，成功后直接复用；无效/过期时使用可见浏览器 OAuth + TOTP 登录，并加密保存到独立号池。失效时尝试重新授权 |
-| **原生 Codex 导入** | Magpie 内置 ChatGPT/Codex | 通过 OAuth 获取 access/id/refresh 全套凭证，使用 `magpie accounts import codex` 导入。仅有 access_token 时不能跳过 OAuth |
+## GUI 安装与使用
 
-另有 `gptfree-import` **工具插件入口**用于从 Magpie 内执行 TXT 导入，两种模式共用同一套解析与登录逻辑。
+1. 打开 Magpie 桌面版的 **Plugins（插件）** 页面，点击 **Add a plugin（添加插件）**，输入 `https://github.com/yang0/magpie-gptfree`，或选择已下载的本仓库文件夹。启用插件。
+2. 在左侧 **Plugins** 分组中点击 **GPTFree 账号导入**。这是独立页面，不是要求输入 TXT 路径的登录表单。
+3. **点击「选择文件」或拖入 TXT 文件**。页面自动解析最多 100 条账号，展示掩码邮箱、三/四字段类型、JWT 过期状态、重复项和格式错误。明文密码、TOTP 和 Token 均不显示。
+4. 选择 **独立 Token 号池**（默认）或 **原生 Codex 导入**，勾选账号归属确认，点击 **开始批量导入**。
+5. 查看每条账号的状态、成功数、复用数、失败原因。支持 **停止导入**。使用「我的账号池」查看和移除独立池的账号。
+6. 在 Magpie 的 **Providers** 中登录/启用 `gptfree-pool`，便可让 Agent 选择它经真实 Codex 模型列表验证可用的模型。原生 Codex 模式的结果则在 Magpie 自带的 ChatGPT / Codex 账号列表中查看。
 
-> ⚠️ Token 号池与原生 Codex 导入的代码及模拟测试已完成，尚未经过真实 ChatGPT 账号 + Windows Magpie 桌面端的完整联调。上游可能限制非官方客户端或账号能力。请先在有权使用的测试账号上验证。
+> GUI 页面由 Magpie 插件服务运行在本机 `127.0.0.1:37986`，不要求另开终端导入。首次使用需要插件主机能启动服务，并且设备已装 Chrome / Edge 供正常的交互式 OAuth 登录。尚未在真实 Windows Magpie + 真实账号上完成端到端验证，请先用少量自有测试账号。
 
-## 一、支持的 TXT 格式
+## 支持的账号格式
 
-每行一条，`----` 或 `---` 分隔，允许混用。第四字段若存在，会自动识别类型。
+每行一条；分隔符支持 `----` 或 `---`，也允许混合。
 
-| 格式 | 样例 | 处理方式 |
-| --- | --- | --- |
-| **1 · 标准三字段** | `邮箱----密码----2FA密钥` | 使用 Codex OAuth/PKCE，自动填入邮箱、密码和 TOTP |
-| **2 · 带邮箱链接** | `邮箱----密码----2FA密钥----https://mail.xxx.store/...` | 自动识别第四字段为邮箱/接码链接，但**只使用前三字段登录**；不访问第三方邮箱链接 |
-| **3 · 带 access_token** | `邮箱----密码----2FA密钥----eyJhbGci...` | 先判断 JWT 过期状态；**号池模式**再向 Codex `/models` 验证 Token，通过才直接复用；否则 OAuth + TOTP 重新登录 |
-| 可选兼容 | `邮箱----密码` | 不要求 TOTP，若有人工验证仍需手动完成 |
+| 输入格式 | GUI 行为 |
+| --- | --- |
+| `邮箱----密码----2FA密钥` | 标准 OAuth + TOTP 登录 |
+| `邮箱----密码----2FA密钥----https://mail.xxx.store/...` | 识别邮箱链接，按前三字段登录；**不会自动访问**第三方邮箱链接 |
+| `邮箱----密码----2FA密钥----eyJhbGci...` | 识别 JWT；号池模式优先向 Codex 的 `/models` 验证，验证通过才直接复用，否则走 OAuth + TOTP |
+| `邮箱----密码` | 可用于无 TOTP 的账号，额外验证仍需人工完成 |
 
-TXT 示例，以下均为占位符：
+示例（仅供了解字段，不是真实凭证）：
 
 ```text
-first@example.com----YOUR_PASSWORD----GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
-second@example.com---YOUR_PASSWORD---GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ---https://mail.xxx.store/example
-third@example.com----YOUR_PASSWORD----GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ----eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQ3MzM4NTYwMDB9.EXAMPLE_SIGNATURE
+first@example.com----PASSWORD----GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
+second@example.com---PASSWORD---GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ---https://mail.xxx.store/example
+third@example.com----PASSWORD----GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ----eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjQ3MzM4NTYwMDB9.EXAMPLE_SIGNATURE
 ```
 
-**注意：** 本地解析 JWT 的 `exp` 只说明其声明的到期时间，**不能验证签名或真实使用权限**。必须有 Codex 上游 `/models` 成功响应，才按“复用 Token”记录。单独 access_token 没有 refresh_token，不能被原生 Codex 导入器当作可长期续期的登录。
+不要提交包含真实凭证的 TXT 到 GitHub。插件不会绕过验证码、异常登录挑战、短信或邮件二次确认；用户需要在打开的官方登录窗口完成。
 
-## 二、安装（Windows / macOS / Linux）
+## 两种导入模式
 
-准备 Magpie、Node.js 20+、Chrome 或 Edge。执行：
+**独立 Token 号池（默认）**：已有 access_token 会被 Codex 上游实际验证；成功才算可复用，验证失败或过期则进入正常交互式 OAuth 登录。账号池保存在当前运行 Magpie 机器用户的 `~/.magpie-gptfree/` 下，使用 AES-256-GCM 加密。密钥存放在同用户权限限定的 `master.key` 文件，**不是系统密钥链或硬件安全模块**。上游 Token 失效后会尝试重新 OAuth，可能仍需人工验证。
 
-```powershell
-git clone --branch feat/standalone-batch-2fa https://github.com/yang0/magpie-gptfree.git
-cd magpie-gptfree
-npm install
-```
+**Magpie 原生 Codex 导入**：每个账号必须通过 OAuth 得到 `access_token`、`id_token` 和 `refresh_token`，再经 Magpie 自带的导入接口入池。单独 access_token 不能被伪装成可续期的原生账号，故不会跳过 OAuth。
 
-开发分支尚未合入 main。请不要把真实账号 TXT 加入 Git 仓库，也不要将 TXT 发给其他人。
+免费 ChatGPT 账号是否拥有 Codex 模型/额度，以官方服务验证为准；软件不保证免费、无限调用。
 
-## 三、推荐：独立 Token 号池（优先复用有效 Token）
+## GUI 设计与技术说明
 
-先检查 TXT 格式（不会登录或联网）：
+- Magpie 的普通插件页面具有 `connect-src 'none'` 限制，因此初始插件页通过 `magpie.page.service` 导航到插件拥有的本地服务界面。它仍在 Magpie 插件的隔离框架内，不提供外网公开 API。
+- 上传的 TXT 只放在后台内存中的临时草稿里；页面只拿到脱敏预览，15 分钟未开始则过期。导入过程中不会把密码/TOTP/Token 写入 Magpie 插件选项、普通 HTML 或日志。
+- GUI API 仅监听 loopback、要求每个页面独立的随机能力令牌和受控请求来源，有限制文件大小。工作流可以取消、按账号查看状态，独立号池只输出掩码账号。
+- **远程 magpie web 注意**：如果在另一台设备浏览 Magpie 网页端，TXT 会通过该网页连接发送到运行 Magpie 的主机。请仅在可信设备及受 TLS 保护的连接下使用。优先在本机桌面版执行账号导入。
+- 服务默认端口 `37986`；如与其他本地程序冲突，可在插件设置中使用 `port` 自定义，页面和服务会读取该设置。禁止暴露服务到 LAN。
 
-```powershell
-node bin/import.mjs --file .\accounts.txt --dry-run
-```
-
-然后导入（默认 `--mode pool`，完整参数如下）：
-
-```powershell
-node bin/import.mjs --file .\accounts.txt --mode pool --i-own-these-accounts
-```
-
-- 对第三种格式，先调用真实 Codex 模型接口确认该 Token 可用，再加密入池，跳过浏览器登录。
-- 对三字段账号、附带邮箱链接的账号、失效/过期 Token，则打开可见 Chrome/Edge，完成 Codex OAuth + PKCE + TOTP；安全挑战需要用户自己操作。
-- 号池保存在当前 OS 用户的 `~/.magpie-gptfree/`：`pool.enc.json` 是 AES-256-GCM 密文，`master.key` 是同用户专有的本地密钥（**不是系统硬件密钥库**）；绝不可泄漏密钥、备份明文账号或把数据目录共享出去。
-- Token 过期或上游返回 401 时，运行中的 Provider 会尝试通过可见浏览器重新 OAuth。**这不是无交互保证**；遇到额外验证需要用户介入，浏览器不可用时账号会标记为不可用并可切换其他账号。
-
-将插件安装到 Magpie，启用号池供应商：
-
-```powershell
-magpie plugin add .
-magpie plugin login gptfree-pool
-magpie provider gptfree-pool
-```
-
-随后在 Magpie Agents / Provider 中选择 `gptfree-pool/<模型 ID>`。模型列表来自 Codex 上游 `/models`，不会凭空声明不存在的模型。
-
-## 四、原生 Codex 模式（需要 refresh_token）
-
-如果希望导入到 Magpie 内置 ChatGPT/Codex 账号列表，而不是独立号池：
-
-```powershell
-node bin/import.mjs --file .\accounts.txt --mode native --i-own-these-accounts
-magpie accounts codex
-```
-
-该模式永远通过 Codex OAuth 获取完整 `access_token` / `id_token` / `refresh_token`，并通过 Magpie CLI 进行原生导入；不将 access-only JWT 伪造成刷新凭证。
-
-## 五、从 Magpie 插件界面启动导入
-
-```powershell
-magpie plugin add .
-magpie plugin login gptfree-import
-```
-
-按提示选择 TXT 完整路径、`pool` 或 `native` 模式，并确认账号所有权。成功后：
-
-- 选 `pool`：需要另外启用 `gptfree-pool` 才能选择模型。
-- 选 `native`：到 Magpie 原生 ChatGPT/Codex 账号列表查看。
-
-Magpie 插件宿主中启动本地 Playwright 和 Magpie CLI 仍需在真实桌面端验证。CLI 方式目前更适合先测试。
-
-## 安全与限制
-
-- 只导入自己有合法使用权的账号，遵守上游规则。此工具不生成账号、不代购、不共享账号。
-- 不破解验证码、不绕过 2FA/风控；页面需要短信、邮件或验证码时由用户自行确认。
-- 第四字段中的第三方邮箱链接**永远不会被自动访问**，防止接码链接导致数据泄露。
-- TXT 密码、TOTP、JWT 不出现在 dry-run、成功日志、失败报告中。不会把账号资料发给仓库、DSH 或其他外部代理。
-- 通过 HTTPS 访问 OpenAI 认证与 Codex 服务，禁用自动 HTTP 重定向；临时 OAuth 文件使用受限制的本地权限并删除。
-- 账号的 Token、模型权限和配额因套餐而异；免费 ChatGPT 账号不等于无限免费 API 调用。短期 Token 无法保证长期有效，重新授权也可能失败。
-- **实际 Codex Responses 协议可能变化**，本插件的请求适配和多账号流式调用尚需真实账号端到端验证。
-- 不建议两个导入进程同时写入一个加密号池目录；Windows ACL 和文件备份权限需额外检查。
-
-## 测试
+## 开发与自动测试
 
 ```bash
+npm install
 npm run check
 npm test
 ```
 
-测试涵盖：三种格式、分隔符、TOTP、JWT 过期和上游确认、Token 优先复用/失败回退、加密存储、请求转发、账号切换与敏感数据脱敏。测试均使用模拟 Token，不连接真实 OpenAI 账号。
+测试覆盖 GUI 注册、文件上传/三格式识别、脱敏预览、随机会话校验、来源限制、开始/进度/取消任务、账号池查看/移除、原有 OAuth/TOTP/Token 与加密存储。测试均使用模拟凭证，**不接触真实 ChatGPT 账号**。
 
-开发进度：[Issue #1](https://github.com/yang0/magpie-gptfree/issues/1) · [Draft PR #2](https://github.com/yang0/magpie-gptfree/pull/2)。
+高级 CLI 仍保留在 `bin/import.mjs`，但不再是常规导入入口。
+
+开发记录：[GUI Issue #3](https://github.com/yang0/magpie-gptfree/issues/3) · [原账号池 Issue #1](https://github.com/yang0/magpie-gptfree/issues/1)。
+
+**待验证**：Windows Magpie 桌面实际嵌入页面 / 浏览器 OAuth / 模型请求全流程。不要把自动测试通过等同于真实账户验收。

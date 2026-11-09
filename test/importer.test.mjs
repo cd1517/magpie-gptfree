@@ -2,7 +2,7 @@ import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { runBatch } from "../lib/importer.mjs";
 import { makePKCE, authorizationURL, codexAuthJSON } from "../lib/oauth.mjs";
-import { GPTFreeImportPlugin } from "../index.mjs";
+import { GPTFreePoolPlugin } from "../index.mjs";
 
 const seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 const jwt = (exp) => [
@@ -97,11 +97,10 @@ test("Codex auth.json includes native refresh and id token", () => {
   assert.equal(obj.tokens.id_token, "not-a-jwt");
 });
 
-test("Magpie plugin uses a dedicated import helper and doesn't falsely expose models", async () => {
-  const plug = await GPTFreeImportPlugin();
+test("Magpie provider is independent from the GUI file import flow", async () => {
+  const plug = await GPTFreePoolPlugin();
   const config = { provider: {} };
   await plug.config(config);
-  assert("gptfree-import" in config.provider);
-  assert.deepEqual(await plug.provider.models(), {});
-  assert.equal(plug.auth.methods[0].type, "oauth");
+  assert("gptfree-pool" in config.provider);
+  assert.equal(plug.auth.methods[0].type, "api");
 });

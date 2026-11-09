@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="gptfree-session" content="__GPTFREE_SESSION__">
+  <title>GPTFree · 账号导入</title>
+  <link rel="stylesheet" href="assets/style.css">
+  <script src="assets/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <header class="header">
+      <div class="brand">
+        <span class="brand-icon">G</span>
+        <div><div class="brand-title">GPTFree <span class="light-title">账号导入</span></div>
+          <div class="brand-sub">Magpie 独立插件 · 本地安全导入</div></div>
+      </div>
+      <span class="secure-pill"><span class="status-dot"></span> 本地运行</span>
+    </header>
+    <main>
+      <section class="hero">
+        <div class="eyebrow">BATCH ACCOUNT IMPORT</div>
+        <h1>批量导入 ChatGPT 账号</h1>
+        <p>选择 TXT 文件、预览账号并开始导入。授权与状态在当前窗口完成，无需使用命令行。</p>
+      </section>
+      <div class="tabs" role="tablist" aria-label="功能">
+        <button type="button" role="tab" class="tab active" aria-selected="true" data-tab="import">批量导入</button>
+        <button type="button" role="tab" class="tab" aria-selected="false" data-tab="pool">我的账号池 <span id="poolCount" class="count">—</span></button>
+      </div>
+      <section id="importPanel" class="panel" role="tabpanel">
+        <div class="section-head"><h2><span class="step">01</span> 选择账号文件</h2>
+          <span class="muted tiny">TXT · 最大 1 MiB · 最多 100 条</span></div>
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="选择 TXT 文件">
+          <div class="upload-mark">⇧</div>
+          <div class="drop-title">拖入 TXT 文件，或点击选择</div>
+          <div id="fileName" class="muted">自动识别三字段与四字段格式，支持 ---- / --- 分隔符</div>
+          <input id="fileInput" type="file" accept=".txt,text/plain" aria-label="选择账号 TXT 文件">
+          <button id="selectFile" type="button" class="btn secondary">选择文件</button>
+        </div>
+        <div id="previewBox" class="preview hidden">
+          <div class="section-head with-top"><h2><span class="step">02</span> 检查导入内容</h2>
+            <div class="summary" id="counts"></div></div>
+          <div id="validation" class="validation hidden" role="alert"></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>行号</th><th>账号</th><th>识别格式</th><th>状态</th></tr></thead>
+            <tbody id="previewRows"></tbody>
+          </table></div>
+          <p class="footnote">仅显示脱敏邮箱。密码、2FA 密钥、JWT 和邮箱链接不会出现在预览或日志中。</p>
+        </div>
+        <div id="actionsBox" class="hidden">
+          <div class="section-head with-top"><h2><span class="step">03</span> 选择导入方式</h2></div>
+          <div class="mode-grid">
+            <label class="mode-card selected">
+              <input type="radio" name="mode" value="pool" checked>
+              <span class="mode-head">独立 Token 号池 <span class="recommend">推荐</span></span>
+              <span class="mode-desc">已有 Token 经 Codex 验证后优先复用；失效时使用 OAuth 重新登录。</span>
+            </label>
+            <label class="mode-card">
+              <input type="radio" name="mode" value="native">
+              <span class="mode-head">Magpie 原生 Codex 账号</span>
+              <span class="mode-desc">全部通过 OAuth 获取完整刷新凭证后导入 Magpie 内置账号列表。</span>
+            </label>
+          </div>
+          <label class="consent"><input type="checkbox" id="consent"> <span>我确认这些账号由我本人持有或已获授权管理。</span></label>
+          <div class="actions"><button id="startButton" class="btn primary" type="button" disabled>开始批量导入</button>
+            <span class="muted tiny">登录时可能打开 Chrome / Edge。验证码或额外安全确认需人工完成。</span></div>
+        </div>
+        <div id="progressBox" class="hidden">
+          <div class="section-head with-top"><h2><span class="step">04</span> 导入进度</h2>
+            <span class="muted" id="progressCaption">准备中…</span></div>
+          <div class="progress-track" role="progressbar" aria-label="导入进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressTrack"><div id="progressFill"></div></div>
+          <div class="stats">
+            <div><strong id="doneCount">0</strong><span>已处理</span></div>
+            <div><strong id="addedCount">0</strong><span>成功导入</span></div>
+            <div><strong id="reusedCount">0</strong><span>复用 Token</span></div>
+            <div><strong id="failedCount">0</strong><span>失败</span></div>
+          </div>
+          <div id="events" class="events" role="log" aria-live="polite"></div>
+          <div class="actions"><button id="cancelButton" class="btn danger" type="button">停止导入</button>
+            <button id="againButton" class="btn secondary hidden" type="button">导入另一批</button></div>
+        </div>
+      </section>
+      <section id="poolPanel" class="panel hidden" role="tabpanel">
+        <div class="section-head"><h2>我的账号池</h2><button id="refreshAccounts" type="button" class="btn secondary small">刷新列表</button></div>
+        <p class="muted">仅展示独立 Token 号池中的脱敏账号。Magpie 原生 Codex 账号请在 Providers 页面查看。</p>
+        <div id="poolList" class="pool-list"></div>
+      </section>
+      <div id="notice" class="notice hidden" role="status"></div>
+    </main>
+    <footer>GPTFree · 所有凭证仅在本机处理。请遵守上游使用规则与账号授权范围。</footer>
+  </div>
+</body>
+</html>

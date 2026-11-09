@@ -1,7 +1,7 @@
 {
   "name": "magpie-gptfree",
-  "version": "0.1.0",
-  "description": "Standalone ChatGPT/Codex account batch importer for Magpie",
+  "version": "0.2.0",
+  "description": "Magpie GUI plugin for safe batch ChatGPT 2FA and token import",
   "type": "module",
   "main": "./index.mjs",
   "bin": {
@@ -12,11 +12,12 @@
     "lib",
     "bin",
     "README.md",
-    "test"
+    "test",
+    "gui"
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "check": "node --check index.mjs && node --check bin/import.mjs && node --check lib/oauth.mjs && node --check lib/login.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs"
+    "check": "node --check index.mjs && node --check bin/import.mjs && node --check lib/oauth.mjs && node --check lib/login.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs && node --check lib/gui-service.mjs && node --check gui/app.js && node --check gui/entry.js"
   },
   "engines": {
     "node": ">=20"
@@ -33,5 +34,20 @@
     "auth",
     "batch-import"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "magpie": {
+    "page": {
+      "title": "GPTFree Account Import",
+      "titles": {
+        "zh": "GPTFree 账号导入",
+        "zh-TW": "GPTFree 帳號匯入"
+      },
+      "file": "gui/entry.html",
+      "service": {
+        "port": 37986,
+        "option": "port"
+      },
+      "keepAlive": true
+    }
+  }
 }

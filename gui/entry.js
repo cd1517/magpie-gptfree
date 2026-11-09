@@ -1,6 +1,13 @@
 (async () => {
   const status = document.querySelector("#state");
+  let pendingAction = "";
   try {
+    if (typeof magpie.onAction === "function") {
+      magpie.onAction((data) => {
+        if (typeof data?.id === "string" && ["batch-import", "manage-pool"].includes(data.id))
+          pendingAction = data.id;
+      });
+    }
     await magpie.ready;
     const options = await magpie.options.get();
     const port = Number(options?.port) || 37986;
@@ -13,6 +20,7 @@
     const target = new URL("ui", base);
     if (target.protocol !== "http:" && target.protocol !== "https:")
       throw new Error("本地服务地址无效");
+    if (pendingAction) target.hash = "action=" + pendingAction;
     // Same as the community magpie-chat page: WebKit can silently leave
     // the sandboxed frame on this bootstrap screen when localhost isn't
     // ready. Offer an IN-MAGPIE retry, not an external browser page.

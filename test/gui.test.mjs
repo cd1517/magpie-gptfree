@@ -32,10 +32,12 @@ async function harness(options = {}) {
   return { service, base, html, token, api, close: async () => service.close() };
 }
 
-test("Magpie GUI manifest points to a real page and a loopback service", async () => {
+test("Magpie GUI manifest points to a real page, provider menu action and a loopback service", async () => {
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
   assert.equal(pkg.magpie.page.file, "gui/entry.html");
   assert.equal(pkg.magpie.page.service.port, GUI_PORT);
+  assert.equal(pkg.magpie.actions[0].id, "batch-import");
+  assert.equal(pkg.magpie.actions[0].menu, "provider");
   assert(pkg.files.includes("gui"));
   assert.equal(typeof GPTFreeGuiPlugin, "function");
   const page = await readFile(new URL("../gui/entry.html", import.meta.url), "utf8");
@@ -45,11 +47,15 @@ test("Magpie GUI manifest points to a real page and a loopback service", async (
   assert(entry.includes("location.replace"));
 });
 
-test("GUI serves a real page plus assets without exposing secrets", async () => {
+test("GUI serves a real page with editable TXT-to-textarea flow and no secrets or storage", async () => {
   const h = await harness();
   try {
     assert(h.html.includes("批量导入账号"));
     assert(h.html.includes("导入并授权入池"));
+    assert(h.html.includes("skipInvalid"));
+    assert(h.html.includes("proxyInput"));
+    assert(h.html.includes("clearPaste"));
+    assert(h.html.includes("refreshAllPool"));
     assert(!h.html.includes(seed));
     assert(h.html.includes("gptfree-session"));
     const asset = await fetch(h.base + "assets/app.js");
@@ -58,11 +64,15 @@ test("GUI serves a real page plus assets without exposing secrets", async () => 
     assert(app.includes("fileInput"));
     assert(app.includes("pasteAccounts"));
     assert(app.includes("checkPaste"));
+    assert(app.includes('$("pasteAccounts").value = text'));
+    assert(!app.includes('$("pasteAccounts").value = ""') || app.includes("clearPaste"));
+    assert(app.includes("accounts/refresh"));
     assert(!h.html.includes("localStorage"));
+    assert(!app.includes("localStorage"));
   } finally { await h.close(); }
 });
 
-test("TXT upload parses 3 formats with masked rows, not passwords, TOTP or Token", async () => {
+test("TXT upload parses 3 and 5-col formats with masked rows, not passwords, TOTP or Token", async () => {
   const h = await harness();
   const jwt = future();
   const secretLink = "https://mail.example.store/verysecret123";
@@ -70,16 +80,17 @@ test("TXT upload parses 3 formats with masked rows, not passwords, TOTP or Token
     `user1@example.com----supersecret1----${seed}`,
     `user2@example.com---supersecret2---${seed}---${secretLink}`,
     `user3@example.com----supersecret3----${seed}----${jwt}`,
+    `user4@example.com----supersecret4----${seed}----${jwt}----rt_never_leaked`,
     `USER1@example.com----other-secret----${seed}`,
   ].join("\n");
   try {
     const { status, json } = await h.api("preview", { text: txt });
     assert.equal(status, 200);
-    assert.equal(json.count, 3);
+    assert.equal(json.count, 4);
     assert.equal(json.duplicates, 1);
-    assert.deepEqual(json.rows.map((row) => row.format), ["standard", "mail_link", "access_token"]);
+    assert.deepEqual(json.rows.map((row) => row.format), ["standard", "mail_link", "access_token", "access_token"]);
     assert.equal(json.rows[2].tokenState, "unexpired_unverified");
-    for (const value of [seed, jwt, secretLink, "supersecret", "user3@example.com"])
+    for (const value of [seed, jwt, secretLink, "supersecret", "user3@example.com", "rt_never_leaked"])
       assert(!JSON.stringify(json).includes(value), "secret included: " + value.slice(0, 4));
   } finally { await h.close(); }
 });
@@ -89,6 +100,8 @@ test("GUI requires its page capability and Origin null to reach sensitive endpoi
   try {
     assert.equal((await h.api("accounts", undefined, { bearer: "0".repeat(64) })).status, 403);
     assert.equal((await h.api("accounts", undefined, { origin: "https://attacker.test" })).status, 403);
+    assert.equal((await h.api("accounts/refresh", { all: true }, { bearer: "0".repeat(64) })).status, 403);
+    assert.equal((await h.api("accounts/refresh", { all: true }, { origin: "https://attacker.test" })).status, 403);
     assert.equal((await h.api("preview", { text: "test@example.com----pass" }, { origin: "https://attacker.test" })).status, 403);
     assert.equal((await h.api("preview", { text: "test@example.com----pass" }, { contentType: false })).status, 403);
     const invalid = await h.api("start", { mode: "pool", consent: true });
@@ -102,14 +115,31 @@ test("GUI requires its page capability and Origin null to reach sensitive endpoi
   } finally { await h.close(); }
 });
 
-test("GUI rejects a draft with validation errors and requires explicit account ownership", async () => {
-  const h = await harness();
+test("GUI rejects strict validation errors unless skipInvalid is opted in and validates proxy", async () => {
+  let seenArgs;
+  const h = await harness({
+    batch: async (args) => {
+      seenArgs = args;
+      args.onProgress({ state: "added", line: 2, email: "us***@example.com" });
+      return { total: 1, added: 1, reused: 0, failed: [], duplicates: 0, invalid: [{ line: 1, reason: "bad" }] };
+    },
+  });
   try {
     const txt = `bad-email----pw----${seed}\nuser@example.com----pw----${seed}`;
     const preview = await h.api("preview", { text: txt });
     assert.equal(preview.status, 200);
     assert.equal(preview.json.errors.length, 1);
     assert.equal((await h.api("start", { mode: "pool", consent: true })).status, 422);
+    assert.equal((await h.api("start", { mode: "pool", consent: true, skipInvalid: true, proxy: "http://u:p@127.0.0.1:7890" })).status, 400);
+    const skipped = await h.api("start", { mode: "pool", consent: true, skipInvalid: true, proxy: "http://127.0.0.1:7890" });
+    assert.equal(skipped.status, 202);
+    for (let i = 0; i < 20; i++) {
+      const st = (await h.api("status")).json;
+      if (st.state === "completed") break;
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    assert.equal(seenArgs.skipInvalid, true);
+    assert.equal(seenArgs.proxy, "http://127.0.0.1:7890");
     const fixed = await h.api("preview", { text: `user@example.com----pw----${seed}` });
     assert.equal(fixed.status, 200);
     assert.equal((await h.api("start", { mode: "pool", consent: false })).status, 403);
@@ -182,22 +212,46 @@ test("GUI cancel aborts an import without disclosing sensitive data", async () =
   } finally { await h.close(); }
 });
 
-test("GUI lists and removes accounts using opaque ids, not raw emails or tokens", async () => {
-  const records = [{ email: "alice@example.com", accessToken: future(), totp: seed, password: "s" }];
+test("GUI lists, refreshes and removes accounts using opaque ids, not raw emails or tokens", async () => {
+  const records = [
+    { email: "alice@example.com", accessToken: future(), totp: seed, password: "s" },
+    { email: "bob@example.com", accessToken: "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJleHAiOjF9.sig", totp: seed, password: "s2" },
+  ];
   let removed;
+  let syncCalls = 0;
   const h = await harness({
     poolRead: async () => records,
     poolRemove: async (email) => { removed = email; },
+    onPoolChange: async () => { syncCalls++; return { connected: true }; },
+    refreshAccount: async (row, opts) => {
+      assert.equal(opts.proxy, "http://127.0.0.1:7890");
+      if (row.email === "alice@example.com") return { ok: true, status: "valid", renewed: false, tokenState: "unexpired_unverified" };
+      return { ok: true, status: "renewed", renewed: true, tokenState: "unexpired_unverified" };
+    },
   });
   try {
     const listed = await h.api("accounts");
     assert.equal(listed.status, 200);
-    assert.equal(listed.json.total, 1);
+    assert.equal(listed.json.total, 2);
+    assert.deepEqual(listed.json.summary, { total: 2, valid: 1, needsRenew: 1 });
     assert.equal(listed.json.accounts[0].email, "al***@example.com");
+    assert.equal(listed.json.accounts[0].tokenState, "unexpired_unverified");
+    assert.equal(listed.json.accounts[1].tokenState, "expired");
     const opaque = listed.json.accounts[0].id;
     assert.match(opaque, /^[a-f0-9]{32}$/);
     assert(!JSON.stringify(listed.json).includes("alice@example.com"));
     assert(!JSON.stringify(listed.json).includes(records[0].accessToken));
+
+    const refreshed = await h.api("accounts/refresh", { all: true, proxy: "http://127.0.0.1:7890" });
+    assert.equal(refreshed.status, 200);
+    assert.equal(refreshed.json.valid, 1);
+    assert.equal(refreshed.json.renewed, 1);
+    assert.equal(refreshed.json.failed, 0);
+    assert.equal(syncCalls, 1);
+    assert(!JSON.stringify(refreshed.json).includes("alice@example.com"));
+    assert(!JSON.stringify(refreshed.json).includes("bob@example.com"));
+
+    assert.equal((await h.api("accounts/refresh", { id: opaque, proxy: "socks5://bad" })).status, 400);
     assert.equal((await h.api("remove", { id: opaque })).status, 200);
     assert.equal(removed, "alice@example.com");
     assert.equal((await h.api("remove", { id: opaque })).status, 404);

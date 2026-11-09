@@ -1,6 +1,6 @@
 // GUI runs in Magpie's sandboxed frame, with a fresh in-memory capability
-// sent on every request. Never write input secrets into storage, the DOM,
-// console, query strings, or plugin options.
+// sent on every request. Never write input secrets into persistent browser
+// storage, query strings, logs, or plugin options.
 (() => {
   const $ = (id) => document.getElementById(id);
   const session = document.querySelector('meta[name="gptfree-session"]')?.content || "";
@@ -10,10 +10,18 @@
     access_token: "附带 JWT Token",
   };
   const tokenLabels = {
-    expired: "Token 过期 · 需要授权",
+    expired: "Token 过期 · 将自动重登",
     unexpired_unverified: "Token 待服务器验证",
     unknown: "Token 有效期未知",
     not_yet_valid: "Token 尚未生效",
+  };
+  const poolTokenBadges = {
+    unexpired_unverified: { cls: "good", text: "Token 有效（待请求确认）" },
+    expired: { cls: "warn", text: "Token 已过期（会自动重登）" },
+    missing: { cls: "bad", text: "无可用 Token" },
+    unknown: { cls: "warn", text: "Token 状态未知" },
+    not_yet_valid: { cls: "warn", text: "Token 尚未生效" },
+    invalid: { cls: "bad", text: "Token 格式异常" },
   };
   const stateLabels = {
     authorizing: "正在授权",
@@ -25,8 +33,9 @@
     mail_link_ignored: "邮箱链接已识别",
     failed: "授权失败",
   };
-  let preview = null, lastSeq = 0, polling = null, busy = false;
+  let preview = null, previewSource = "", lastSeq = 0, polling = null, busy = false, poolBusy = false;
   const jobStates = new Map();
+  const rowMessages = new Map();
 
   function el(tag, className, content) {
     const n = document.createElement(tag);
@@ -40,6 +49,18 @@
     n.className = "notice" + (error ? " error" : "");
   }
   function hidden(id, yes) { $(id).classList.toggle("hidden", yes); }
+  function countTextLines(text) {
+    let lines = 0;
+    for (const raw of String(text || "").split(/\r?\n/)) {
+      const s = raw.trim();
+      if (s && !s.startsWith("#") && !s.startsWith("//")) lines++;
+    }
+    return lines;
+  }
+  function updateLineCounter() {
+    const n = countTextLines($("pasteAccounts").value);
+    $("lineCount").textContent = n + " 行有效文本";
+  }
   async function api(route, data = undefined) {
     const opts = {
       method: data === undefined ? "GET" : "POST",
@@ -60,18 +81,24 @@
     if (!response.ok) throw new Error(json.error || "操作失败");
     return json;
   }
+  function hasDraftChanges() {
+    return $("pasteAccounts").value !== previewSource;
+  }
+  function canStartImport() {
+    return $("consent").checked && !!$("pasteAccounts").value.trim();
+  }
   function setBusy(next) {
     busy = next;
     $("selectFile").disabled = busy;
     $("fileInput").disabled = busy;
     $("checkPaste").disabled = busy;
+    $("clearPaste").disabled = busy;
     $("pasteAccounts").disabled = busy;
-    $("pasteTab").disabled = busy;
-    $("fileTab").disabled = busy;
-    $("startButton").disabled = busy || !preview?.count || !!preview?.errors?.length || !$("consent").checked;
-    document.querySelectorAll('input[name="mode"]').forEach((input) => input.disabled = busy);
+    $("skipInvalid").disabled = busy;
+    $("proxyInput").disabled = busy;
     $("consent").disabled = busy;
     $("dropzone").classList.toggle("disabled", busy);
+    $("startButton").disabled = busy || !canStartImport();
   }
   function renderPreview(rows) {
     const tbody = $("previewRows");
@@ -100,7 +127,8 @@
     const box = $("validation");
     box.replaceChildren();
     if (preview.errors.length) {
-      box.append(el("strong", "", "请先修正以下格式错误："));
+      box.append(el("strong", "",
+        "以下行存在格式错误，请直接在上方文本框修改对应行，或勾选「跳过格式错误行，仅导入有效账号」："));
       const ul = el("ul");
       for (const e of preview.errors.slice(0, 20))
         ul.append(el("li", "", "第 " + e.line + " 行：" + e.reason));
@@ -109,52 +137,59 @@
     } else hidden("validation", true);
     renderPreview(preview.rows);
     hidden("previewBox", false);
-    hidden("actionsBox", false);
-    setBusy(false);
+    setBusy(busy);
   }
-  async function previewText(text, sourceLabel = "粘贴内容") {
-    if (busy) return;
-    if (!text || !text.trim()) { notice("请先填写账号列表", true); return; }
-    if (new TextEncoder().encode(text).length > 1024 * 1024) {
-      notice("账号列表超过 1 MiB，请分批导入", true); return;
+  async function previewText(text, sourceLabel = "文本框内容") {
+    if (!text || !text.trim()) {
+      notice("请先选择 TXT 文件或在文本框输入账号列表", true);
+      return false;
     }
+    if (new TextEncoder().encode(text).length > 1024 * 1024) {
+      notice("账号列表超过 1 MiB，请分批导入", true);
+      return false;
+    }
+    const wasBusy = busy;
     setBusy(true);
     hidden("progressBox", true);
     jobStates.clear();
     preview = null;
+    previewSource = text;
     try {
       const data = await api("preview", { text });
       preview = data;
       renderValidation();
-      notice(sourceLabel + " 已解析，请检查脱敏预览，然后点击「导入并授权入池」");
+      if (data.errors.length && !$("skipInvalid").checked) {
+        notice(sourceLabel + " 已加载到文本框（发现 " + data.errors.length + " 行格式错误）：可直接编辑修改后继续，或勾选「跳过格式错误行」", true);
+      } else if (data.errors.length) {
+        notice(sourceLabel + " 已解析：" + data.count + " 条有效（已选择跳过 " + data.errors.length + " 条错误行），可点击「导入并授权入池」");
+      } else {
+        notice(sourceLabel + " 已解析（" + data.count + " 条有效），可继续在文本框微调或点击「导入并授权入池」");
+      }
+      return true;
     } catch (err) {
       hidden("previewBox", true);
-      hidden("actionsBox", true);
       notice(err.message, true);
-    } finally { setBusy(false); }
+      return false;
+    } finally { setBusy(wasBusy); }
   }
   async function loadText(file) {
-    if (busy) return;
-    if (!file || file.size > 1024 * 1024) {
+    if (busy || !file) return;
+    if (file.size > 1024 * 1024) {
       notice("请选择小于 1 MiB 的 TXT 文件", true);
       return;
     }
-    if (!/\\.txt$/i.test(file.name) && file.type !== "text/plain") {
+    if (!/\.txt$/i.test(file.name) && file.type !== "text/plain") {
       notice("请使用 TXT 文件", true);
       return;
     }
-    $("fileName").textContent = file.name + " · " + Math.ceil(file.size / 1024) + " KiB";
+    $("fileName").textContent = file.name + " · " + Math.ceil(file.size / 1024) + " KiB（已填入下方文本框，可直接编辑）";
     const text = await file.text();
+    // Put loaded file text straight into the editable textarea so malformed lines
+    // can be inspected and corrected without re-uploading.
+    $("pasteAccounts").value = text;
+    updateLineCounter();
+    $("pasteAccounts").focus();
     await previewText(text, "TXT 文件");
-  }
-  function switchSource(mode) {
-    const paste = mode === "paste";
-    hidden("pastePanel", !paste);
-    hidden("filePanel", paste);
-    $("pasteTab").classList.toggle("active", paste);
-    $("fileTab").classList.toggle("active", !paste);
-    $("pasteTab").setAttribute("aria-selected", String(paste));
-    $("fileTab").setAttribute("aria-selected", String(!paste));
   }
   function addEvent(entry) {
     const div = el("div", "event");
@@ -200,14 +235,15 @@
       hidden("againButton", false);
       await loadPool();
       if (info.state === "completed") {
+        const added = info.result?.added ?? info.added ?? 0;
+        const failed = info.result?.failed ?? info.failed ?? 0;
+        const skipped = info.result?.invalid ?? 0;
         if (info.providerConnected === true)
-          notice("账号已完成导入及自动授权，GPTFree 号池已连接 Magpie，可以直接选择可用模型");
+          notice(`导入完成：新增/更新 ${added} 个账号进入共享号池（失败 ${failed}${skipped ? `，已跳过错误行 ${skipped}` : ""}），多账号自动轮询已就绪`);
         else if (info.providerConnected === false)
           notice(info.message || "账号已入池，但连接 Magpie 号池失败；请检查插件状态", true);
-        else if (info.mode === "native")
-          notice("账号导入完成；成功授权的账号已直接写入 Magpie 原生 Codex 账号池");
         else
-          notice("账号导入完成，可在「我的账号池」查看；当前批次没有可用账号时不会连接供应商");
+          notice("批量处理完成，可在「我的账号池」查看账号与详细状态；没有可用账号时不会连接供应商");
       } else notice(info.message || "批量导入已停止，未完成的账号可稍后重试", true);
     }
   }
@@ -216,7 +252,26 @@
     polling = null;
   }
   async function begin() {
-    if (!preview || preview.errors.length || !$("consent").checked || busy) return;
+    if (busy || !$("consent").checked) return;
+    const text = $("pasteAccounts").value;
+    const skipInvalid = $("skipInvalid").checked;
+    if (!text.trim()) {
+      notice("请先选择 TXT 文件或在文本框输入账号", true);
+      return;
+    }
+    if (hasDraftChanges() || !preview) {
+      const ok = await previewText(text, "当前编辑文本");
+      if (!ok) return;
+    }
+    if (!preview || !preview.count) {
+      notice("没有可导入的有效账号，请检查文本框内容", true);
+      return;
+    }
+    if (preview.errors.length && !skipInvalid) {
+      $("previewBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
+      notice("仍有 " + preview.errors.length + " 行格式错误：请直接在上方文本框修改，或勾选「跳过格式错误行，仅导入有效账号」", true);
+      return;
+    }
     setBusy(true);
     jobStates.clear();
     lastSeq = 0;
@@ -226,12 +281,16 @@
     hidden("cancelButton", false);
     $("progressFill").style.width = "0%";
     try {
-      const mode = document.querySelector('input[name="mode"]:checked')?.value || "pool";
-      await api("start", { mode: "pool", consent: true });
+      await api("start", {
+        mode: "pool",
+        consent: true,
+        skipInvalid,
+        proxy: $("proxyInput").value.trim(),
+      });
       $("progressBox").scrollIntoView({ behavior: "smooth", block: "nearest" });
       stopPolling();
       await status();
-      notice("已开始 DSH 风格后台 HTTP 登录；不会自动打开网页登录页，请在下方查看每条结果");
+      notice("已开始 DSH 风格后台 HTTP 批量登录；成功入池的多个账号将自动加入共享号池轮询");
     } catch (err) {
       setBusy(false);
       hidden("progressBox", true);
@@ -246,23 +305,71 @@
       notice("已请求停止；当前账号的授权操作正在取消");
     } catch (err) { notice(err.message, true); }
   }
+  function formatTime(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime()) ? "" : "更新于 " + d.toLocaleString();
+  }
+  async function refreshAccounts(payload) {
+    if (poolBusy || busy) return;
+    poolBusy = true;
+    $("refreshAllPool").disabled = true;
+    try {
+      const proxy = ($("poolProxyInput").value || $("proxyInput").value || "").trim();
+      const res = await api("accounts/refresh", { ...payload, proxy });
+      for (const item of res.results || []) {
+        if (item.status === "valid") rowMessages.set(item.id, "上次检测：有效可用");
+        else if (item.status === "renewed") rowMessages.set(item.id, "上次刷新：已重新授权并更新 Token");
+        else rowMessages.set(item.id, "上次刷新失败：" + (item.reason || "请检查网络或账号状态"));
+      }
+      await loadPool();
+      if (res.failed > 0 && res.renewed === 0 && res.valid === 0)
+        notice("检测完成：" + res.failed + " 个账号刷新失败，请检查代理或账号状态", true);
+      else
+        notice(`检测完成：有效 ${res.valid} 个 · 续期 ${res.renewed} 个 · 失败 ${res.failed} 个`);
+    } catch (err) {
+      notice(err.message, true);
+    } finally {
+      poolBusy = false;
+      $("refreshAllPool").disabled = false;
+    }
+  }
   async function loadPool() {
     try {
       const data = await api("accounts");
       $("poolCount").textContent = data.total;
+      const summary = data.summary || { total: data.total, valid: 0, needsRenew: 0 };
+      $("poolSummary").textContent = data.total
+        ? `共 ${summary.total} 个入池账号 · 有效 ${summary.valid} · 待续期/异常 ${summary.needsRenew} · 多账号自动轮询中`
+        : "号池暂无账号 · 请先导入账号";
+      $("refreshAllPool").disabled = poolBusy || !data.accounts.length;
       const list = $("poolList");
       list.replaceChildren();
       if (!data.accounts.length) {
-        list.append(el("div", "empty", "独立号池暂无账号。先在「批量导入」中选择 Token 号池模式。"));
+        list.append(el("div", "empty", "独立号池暂无账号。请在「批量导入」选择 TXT 文件或粘贴账号批量导入。"));
         return;
       }
       for (const account of data.accounts) {
         const item = el("div", "account-row");
         const left = el("div", "account-main");
-        left.append(el("strong", "", account.email));
-        left.append(el("small", "", account.hasAccess ? "Token 已保存 · 状态以实际请求为准" : "无可用 Token"));
+        const head = el("div", "account-head");
+        head.append(el("strong", "", account.email));
+        const badge = poolTokenBadges[account.tokenState] || (account.hasAccess
+          ? poolTokenBadges.unexpired_unverified
+          : poolTokenBadges.missing);
+        head.append(el("span", "pill " + badge.cls, badge.text));
+        left.append(head);
+        const sub = [formatTime(account.updatedAt), rowMessages.get(account.id)].filter(Boolean).join(" · ");
+        left.append(el("small", "", sub || "已纳入共享号池轮询 · Token 无明文显示"));
         item.append(left);
         const controls = el("div", "account-buttons");
+        const refresh = el("button", "btn secondary small", "检测/刷新");
+        refresh.type = "button";
+        refresh.disabled = poolBusy;
+        refresh.addEventListener("click", async () => {
+          refresh.textContent = "处理中…";
+          await refreshAccounts({ id: account.id, force: account.tokenState !== "unexpired_unverified" });
+        });
         const remove = el("button", "btn secondary small", "移除");
         remove.type = "button";
         let confirming = false;
@@ -276,17 +383,18 @@
           remove.disabled = true;
           try {
             const removed = await api("remove", { id: account.id });
+            rowMessages.delete(account.id);
             await loadPool();
             if (removed.connectionError)
               notice("账号已移除，但 Magpie 供应商状态同步失败", true);
             else if (removed.providerConnected === false)
               notice("最后一个账号已移除，GPTFree 号池已自动断开");
             else
-              notice("账号已从本地号池移除，其余账号可继续使用");
+              notice("账号已从本地号池移除，其余账号将继续轮询工作");
           }
           catch (err) { notice(err.message, true); remove.disabled = false; }
         });
-        controls.append(remove);
+        controls.append(refresh, remove);
         item.append(controls);
         list.append(item);
       }
@@ -305,19 +413,45 @@
     if (next === "pool") loadPool();
   }
   function setup() {
-    // Always shown INSIDE Magpie's plugin frame. Providers has a native
-    // OS file dialog; it never navigates the import form to a web tab.
+    // Always shown INSIDE Magpie's plugin frame. Choosing a file loads its
+    // contents directly into #pasteAccounts so errors can be edited in place.
     document.querySelectorAll(".tab").forEach((button) =>
       button.addEventListener("click", () => tab(button.dataset.tab)));
-    $("pasteTab").addEventListener("click", () => switchSource("paste"));
-    $("fileTab").addEventListener("click", () => switchSource("file"));
+    $("goImport").addEventListener("click", () => {
+      tab("import");
+      $("pasteAccounts").focus();
+    });
     $("checkPaste").addEventListener("click", async () => {
       if (busy) return;
-      // The raw value is cleared from the DOM after transfer to the short
-      // lived in-memory server draft; it is never persisted in the UI.
-      const text = $("pasteAccounts").value;
-      await previewText(text, "粘贴账号");
-      if (preview) $("pasteAccounts").value = "";
+      await previewText($("pasteAccounts").value, "文本框内容");
+    });
+    $("clearPaste").addEventListener("click", () => {
+      if (busy) return;
+      $("pasteAccounts").value = "";
+      preview = null;
+      previewSource = "";
+      jobStates.clear();
+      hidden("previewBox", true);
+      $("fileName").textContent = "文件内容会直接填入下方文本框；若某行格式不对可直接改好后再导入";
+      updateLineCounter();
+      setBusy(false);
+      notice("已清空输入框");
+    });
+    $("pasteAccounts").addEventListener("input", () => {
+      if (!$("pasteAccounts").value.trim()) {
+        preview = null;
+        previewSource = "";
+        hidden("previewBox", true);
+      }
+      updateLineCounter();
+      setBusy(busy);
+    });
+    $("skipInvalid").addEventListener("change", () => setBusy(busy));
+    $("proxyInput").addEventListener("input", () => {
+      $("poolProxyInput").value = $("proxyInput").value;
+    });
+    $("poolProxyInput").addEventListener("input", () => {
+      $("proxyInput").value = $("poolProxyInput").value;
     });
     $("selectFile").addEventListener("click", (event) => {
       event.stopPropagation(); $("fileInput").click();
@@ -341,23 +475,35 @@
       loadText(event.dataTransfer?.files?.[0]);
     });
     $("consent").addEventListener("change", () => setBusy(busy));
-    document.querySelectorAll('input[name="mode"]').forEach((input) =>
-      input.addEventListener("change", () => {
-        document.querySelectorAll(".mode-card").forEach((card) =>
-          card.classList.toggle("selected", card.querySelector("input").checked));
-      }));
     $("startButton").addEventListener("click", begin);
     $("cancelButton").addEventListener("click", cancel);
     $("againButton").addEventListener("click", () => {
-      stopPolling(); preview = null; jobStates.clear();
-      hidden("previewBox", true); hidden("actionsBox", true);
-      hidden("progressBox", true); $("fileName").textContent = "请重新选择一个 TXT 文件";
+      stopPolling(); preview = null; previewSource = ""; jobStates.clear();
+      hidden("previewBox", true); hidden("progressBox", true);
+      $("fileName").textContent = "文件内容会直接填入下方文本框；若某行格式不对可直接改好后再导入";
       $("pasteAccounts").value = "";
-      switchSource("paste");
+      updateLineCounter();
       $("cancelButton").textContent = "停止导入"; $("cancelButton").disabled = false;
-      notice("可以导入下一批账号");
+      setBusy(false);
+      $("pasteAccounts").focus();
+      notice("文本框已清空，可以继续批量追加下一批账号到同一个号池");
     });
     $("refreshAccounts").addEventListener("click", loadPool);
+    $("refreshAllPool").addEventListener("click", () => refreshAccounts({ all: true }));
+    window.addEventListener("message", (ev) => {
+      if (ev.data?.magpie === 1 && ev.data?.event === "action") {
+        const id = ev.data?.data?.id;
+        if (id === "manage-pool") tab("pool");
+        else if (id === "batch-import") {
+          tab("import");
+          $("pasteAccounts").focus();
+        }
+      }
+    });
+    if (location.hash === "#action=manage-pool") tab("pool");
+    else if (location.hash === "#action=batch-import") $("pasteAccounts").focus();
+    updateLineCounter();
+    setBusy(false);
     loadPool();
     status();
   }

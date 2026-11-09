@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createPoolConnector, POOL_PROVIDER, POOL_MARKER } from "../lib/pool-connection.mjs";
+import {
+  createPoolConnector, formatPoolAccountLabel, POOL_PROVIDER, POOL_MARKER,
+} from "../lib/pool-connection.mjs";
 import { GPTFreePoolPlugin } from "../index.mjs";
 
 const entry = { email: "example@example.com", password: "not-stored-owner-password", totp: "", accessToken: "sample.token" };
+const entry2 = { email: "second@example.com", password: "not-stored-owner-password-2", totp: "", accessToken: "sample.token.2" };
 function host() {
   const saved = new Map();
   const client = { auth: {
@@ -21,13 +24,19 @@ test("empty local pool has no provider sign-in and no separate login method", as
   assert.equal((await GPTFreePoolPlugin()).auth.methods[0].type, "oauth");
 });
 
-test("existing pool reconnects to Magpie automatically with a non-secret marker", async () => {
+test("existing pool reconnects to Magpie automatically with a non-secret marker and reflects pool count", async () => {
   const h = host();
-  const connect = createPoolConnector(h.client, { poolRead: async () => [entry] });
+  let rows = [entry];
+  const connect = createPoolConnector(h.client, { poolRead: async () => rows });
   assert.equal((await connect.sync()).connected, true);
   assert.equal(h.saved.get(POOL_PROVIDER).key, POOL_MARKER);
+  assert.equal(h.saved.get(POOL_PROVIDER).accountId, formatPoolAccountLabel(1));
+  rows = [entry, entry2];
+  assert.deepEqual(await connect.sync(), { connected: true, count: 2 });
+  assert.equal(h.saved.get(POOL_PROVIDER).accountId, "GPTFree 号池 (2 个账号)");
   assert(!JSON.stringify([...h.saved]).includes(entry.accessToken));
   assert(!JSON.stringify([...h.saved]).includes(entry.password));
+  assert(!JSON.stringify([...h.saved]).includes(entry2.email));
   const opts = await (await GPTFreePoolPlugin()).auth.loader(async () => h.saved.get(POOL_PROVIDER));
   assert.equal(opts.apiKey, POOL_MARKER);
 });

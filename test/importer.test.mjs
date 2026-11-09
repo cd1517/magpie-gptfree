@@ -62,6 +62,38 @@ test("all TXT records use the standalone DSH HTTP authentication path", async ()
     assert(!printed.includes(x));
 });
 
+test("skipInvalid imports valid multi-account batch with proxy and reports invalid lines safely", async () => {
+  const txt = [
+    `bad-email----pw----${seed}`,
+    `good1@example.com----pw1----${seed}`,
+    `good2@example.com----pw2----${seed}`,
+  ].join("\n");
+  await assert.rejects(runBatch({
+    file: "virtual.txt", read: async () => txt, consent: true,
+  }), /格式错误/);
+  const seenProxies = [];
+  const stored = [];
+  const result = await runBatch({
+    file: "virtual.txt",
+    read: async () => txt,
+    consent: true,
+    skipInvalid: true,
+    proxy: "http://127.0.0.1:7890",
+    login: async (account, opts) => {
+      seenProxies.push(opts.proxy);
+      return { tokens: { access: "fresh-" + account.email, refresh: "", id: "" } };
+    },
+    verifyToken: async () => ({ accepted: true }),
+    savePool: async (record) => stored.push(record.email),
+  });
+  assert.equal(result.total, 2);
+  assert.equal(result.added, 2);
+  assert.equal(result.invalid.length, 1);
+  assert.equal(result.invalid[0].line, 1);
+  assert.deepEqual(seenProxies, ["http://127.0.0.1:7890", "http://127.0.0.1:7890"]);
+  assert.deepEqual(stored, ["good1@example.com", "good2@example.com"]);
+});
+
 test("one failed HTTP account does not discard the next one or leak exceptions", async () => {
   const txt = [`a@example.com----p----${seed}`, `b@example.com----p----${seed}`].join("\n");
   const result = await runBatch({

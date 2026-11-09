@@ -47,6 +47,17 @@
         "option": "port"
       },
       "keepAlive": true
-    }
+    },
+    "actions": [
+      {
+        "id": "batch-import",
+        "menu": "provider",
+        "title": "GPTFree Batch Import & Pool",
+        "titles": {
+          "zh": "GPTFree 批量导入 / 号池管理",
+          "zh-TW": "GPTFree 批量匯入 / 號池管理"
+        }
+      }
+    ]
   }
 }

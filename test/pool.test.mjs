@@ -4,7 +4,10 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { upsertPool, listPool, removePool } from "../lib/pool-vault.mjs";
-import { verifyAccessToken, poolFetch, prepareCodexBody, CODEX_BASE, renewAccount } from "../lib/codex-pool.mjs";
+import {
+  verifyAccessToken, poolFetch, prepareCodexBody, CODEX_BASE,
+  renewAccount, discoverPoolModels, refreshPoolAccount,
+} from "../lib/codex-pool.mjs";
 import { runBatch } from "../lib/importer.mjs";
 import { GPTFreePoolPlugin } from "../index.mjs";
 
@@ -148,6 +151,78 @@ test("pool request uses local vault token and fails over when one account rate l
   assert.equal(used.length, 2);
   assert.notEqual(used[0], used[1]);
   assert.equal(await response.text(), "data: done\n\n");
+});
+
+test("multi-account pool rotates across accounts on successive requests", async () => {
+  const accounts = [
+    { email: "r1@example.com", password: "p", totp: seed, accessToken: jwt(3600, "r1@example.com") },
+    { email: "r2@example.com", password: "p", totp: seed, accessToken: jwt(3600, "r2@example.com") },
+    { email: "r3@example.com", password: "p", totp: seed, accessToken: jwt(3600, "r3@example.com") },
+  ];
+  const seen = [];
+  for (let i = 0; i < 3; i++) {
+    const res = await poolFetch(CODEX_BASE + "/responses",
+      { body: '{"model":"gpt-6","input":"hi"}', method: "POST" },
+      {
+        read: async () => accounts,
+        fetcher: async (_url, init) => {
+          seen.push(init.headers.get("authorization"));
+          return new Response("data: ok\n\n", { status: 200 });
+        },
+      });
+    assert.equal(res.status, 200);
+  }
+  assert.equal(new Set(seen).size, 3);
+});
+
+test("discoverPoolModels renews expired multi-account pool and skips failed accounts", async () => {
+  const dead = { email: "dead@example.com", password: "p", totp: seed, accessToken: jwt(-3600, "dead@example.com") };
+  const recoverable = { email: "ok@example.com", password: "p", totp: seed, accessToken: jwt(-3600, "ok@example.com") };
+  const renewedToken = jwt(3600, "ok@example.com");
+  const models = await discoverPoolModels({
+    read: async () => [dead, recoverable],
+    reauthenticate: async (account) => {
+      if (account.email === "dead@example.com") throw new Error("locked");
+      return { ...account, accessToken: renewedToken };
+    },
+    fetcher: async (_url, opts) => {
+      if (opts.headers.get("authorization") === "Bearer " + renewedToken) return okModels();
+      return new Response("{}", { status: 401 });
+    },
+  });
+  assert.deepEqual(Object.keys(models), ["gpt-6"]);
+});
+
+test("refreshPoolAccount checks valid tokens and renews expired ones without leaking secrets", async () => {
+  const validAcc = { email: "live@example.com", password: "secret", totp: seed, accessToken: jwt(3600, "live@example.com") };
+  const liveRes = await refreshPoolAccount(validAcc, {
+    verify: async () => ({ accepted: true, models: { "gpt-6": {} } }),
+    reauthenticate: async () => { throw Error("should not reauthenticate valid account"); },
+  });
+  assert.deepEqual(liveRes, {
+    ok: true, status: "valid", renewed: false, tokenState: "unexpired_unverified", modelCount: 1,
+  });
+
+  const expiredAcc = { email: "old@example.com", password: "secret", totp: seed, accessToken: jwt(-300, "old@example.com") };
+  let passedProxy = "";
+  const renewRes = await refreshPoolAccount(expiredAcc, {
+    proxy: "http://127.0.0.1:7890",
+    reauthenticate: async (acc, opts) => {
+      passedProxy = opts.proxy;
+      return { ...acc, accessToken: jwt(3600, acc.email) };
+    },
+  });
+  assert.equal(passedProxy, "http://127.0.0.1:7890");
+  assert.equal(renewRes.ok, true);
+  assert.equal(renewRes.status, "renewed");
+  assert.equal(renewRes.renewed, true);
+
+  const failRes = await refreshPoolAccount(expiredAcc, {
+    reauthenticate: async () => { throw new Error("raw-secret-token=abc"); },
+  });
+  assert.equal(failRes.ok, false);
+  assert.equal(failRes.status, "failed");
+  assert(!failRes.reason.includes("raw-secret-token"));
 });
 
 test("pool rejects exfiltration URLs before sending credentials", async () => {

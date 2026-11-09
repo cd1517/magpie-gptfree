@@ -13,11 +13,12 @@ const showHelp = () => {
 可选：
   --proxy http://127.0.0.1:7890        指定可信的 HTTP(S) 代理
   --dry-run                            只检查 TXT 格式（不登录）
+  --skip-invalid                       跳过格式错误行，仅导入有效账号
   --mode pool                          仅支持独立 HTTP Token 号池（默认）
   --i-own-these-accounts               确认账号归属/管理权
   --help                               查看帮助
 
-TXT 格式：邮箱----密码----Base32 TOTP密钥；没有 2FA 可仅填邮箱----密码。
+TXT 格式：邮箱----密码----Base32 TOTP密钥[----邮箱链接/Token][----RefreshToken]；没有 2FA 可仅填邮箱----密码。
 注：本版本沿用 DSH 后台 HTTP 密码 + TOTP 授权，不打开登录浏览器；额外上游验证可能导致该账号授权失败。
 `);
 };
@@ -31,6 +32,7 @@ else {
       file,
       mode: get("--mode") || "pool",
       proxy: get("--proxy") || "",
+      skipInvalid: args.includes("--skip-invalid"),
       dryRun: args.includes("--dry-run"),
       consent: args.includes("--i-own-these-accounts"),
       onProgress: ({ state, email, line, reason }) => {

@@ -13,16 +13,16 @@
     <header class="header">
       <div class="brand">
         <span class="brand-icon">G</span>
-        <div><div class="brand-title">GPTFree <span class="light-title">账号导入</span></div>
-          <div class="brand-sub">Magpie 独立插件 · 本地安全导入</div></div>
+        <div><div class="brand-title">GPTFree <span class="light-title">多账号号池导入与管理</span></div>
+          <div class="brand-sub">Magpie 独立插件 · 本地加密号池 · 自动轮询故障转移</div></div>
       </div>
       <span class="secure-pill"><span class="status-dot"></span> 本地运行</span>
     </header>
     <main>
       <section class="hero">
-        <div class="eyebrow">BATCH ACCOUNT IMPORT</div>
+        <div class="eyebrow">BATCH ACCOUNT POOL</div>
         <h1>批量导入 ChatGPT 账号</h1>
-        <p>选择 TXT 文件、预览账号并开始导入。授权与状态在当前窗口完成，无需使用命令行。</p>
+        <p>选择 TXT 文件或直接粘贴多行账号进入下方编辑框，可随时修改格式异常行；所有入池账号会在请求时自动轮询与故障转移。</p>
       </section>
       <div class="tabs" role="tablist" aria-label="功能">
         <button type="button" role="tab" class="tab active" aria-selected="true" data-tab="import">批量导入</button>
@@ -30,30 +30,55 @@
       </div>
       <section id="importPanel" class="panel" role="tabpanel">
         <div class="section-head"><h2><span class="step">01</span> 批量导入账号</h2>
-          <span class="muted tiny">最多 100 条 · 支持自动后台登录</span></div>
-        <p class="form-intro">每行一个账号，导入前会检查邮箱、密码、2FA 与附加 Token 的格式。粘贴内容只供本次导入使用。</p>
-        <div class="source-tabs" role="tablist" aria-label="账号导入来源">
-          <button id="pasteTab" class="source-tab active" role="tab" type="button" aria-selected="true">粘贴账号</button>
-          <button id="fileTab" class="source-tab" role="tab" type="button" aria-selected="false">导入 TXT 文件</button>
-        </div>
-        <div id="pastePanel">
-          <label class="field-label" for="pasteAccounts">账号列表</label>
-          <textarea id="pasteAccounts" rows="8" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" placeholder="邮箱----密码----2FA密钥&#10;邮箱----密码----2FA密钥----https://mail.xxx.store/...&#10;邮箱----密码----2FA密钥----eyJhbGci..."></textarea>
-          <p class="footnote">支持 <code>----</code> 和 <code>---</code> 分隔符，第四字段可为邮箱链接或 JWT access_token。不会在预览中显示密码和 Token。</p>
-          <div class="actions"><button id="checkPaste" type="button" class="btn primary">检查账号格式</button>
-            <span class="muted tiny">粘贴账号后先检查，再开始导入</span></div>
-        </div>
-        <div id="filePanel" class="hidden">
-          <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="选择 TXT 文件">
-            <div class="upload-mark">⇧</div>
-            <div class="drop-title">拖入 TXT 文件，或点击选择</div>
-            <div id="fileName" class="muted">自动识别三字段与四字段格式，支持 ---- / --- 分隔符</div>
-            <input id="fileInput" type="file" accept=".txt,text/plain" aria-label="选择账号 TXT 文件">
-            <button id="selectFile" type="button" class="btn secondary">选择文件</button>
+          <span class="muted tiny">单批最多 100 条 · 可多次追加，累计支持 1000 个多账号轮询</span></div>
+
+        <div class="format-guide">
+          <div class="format-title">支持导入的账号格式规范（每行一条，分隔符兼容 <code>----</code> 或 <code>---</code>）：</div>
+          <div class="format-list">
+            <div><span class="fmt-tag">格式 1 标准三字段</span><code>邮箱----密码----2FA密钥</code> <span class="muted">（自动后台 HTTP OAuth + TOTP 换取 Token 入池）</span></div>
+            <div><span class="fmt-tag">格式 2 带邮箱链接</span><code>邮箱----密码----2FA密钥----https://mail.xxx.store/...</code> <span class="muted">（自动识别前三项登录，不主动请求链接）</span></div>
+            <div><span class="fmt-tag">格式 3/4 带 Token</span><code>邮箱----密码----2FA密钥----eyJhbGci...</code> <span class="muted">（也兼容 5 段结尾附 refresh_token，优先复用、过期自动重登）</span></div>
           </div>
         </div>
+
+        <div id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="选择或拖入 TXT 文件到文本框">
+          <div class="file-row">
+            <div>
+              <div class="drop-title">选择或拖入 .txt 账号文件（加载后可在下方直接编辑）</div>
+              <div id="fileName" class="muted">文件内容会直接填入下方文本框；若某行格式不对可直接改好后再导入</div>
+            </div>
+            <button id="selectFile" type="button" class="btn secondary">选择 TXT 文件</button>
+          </div>
+          <input id="fileInput" type="file" accept=".txt,text/plain" aria-label="选择账号 TXT 文件">
+        </div>
+
+        <div class="editor-head">
+          <label class="field-label" for="pasteAccounts">账号列表文本框（可直接粘贴，或选择文件后在此编辑修正）</label>
+          <span id="lineCount" class="muted tiny">0 行有效文本</span>
+        </div>
+        <textarea id="pasteAccounts" rows="9" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" placeholder="user1@example.com----password----BASE32TOTPSECRET&#10;user2@example.com----password----BASE32TOTPSECRET----https://mail.xxx.store/...&#10;user3@example.com----password----BASE32TOTPSECRET----eyJhbGci...&#10;user4@example.com----password----BASE32TOTPSECRET----eyJhbGci...----rt_refresh_token"></textarea>
+        <p class="footnote">提示：可多次批量导入追加到同一个号池。密码、2FA 密钥、JWT 与邮箱链接只保存在本机内存和加密号池中，预览和状态仅显示脱敏邮箱。</p>
+
+        <div class="toolbar">
+          <button id="checkPaste" type="button" class="btn secondary">检查账号格式</button>
+          <button id="clearPaste" type="button" class="btn secondary">清空输入</button>
+          <label class="inline-check"><input type="checkbox" id="skipInvalid"> <span>跳过格式错误行，仅导入有效账号</span></label>
+        </div>
+
+        <div class="options-panel">
+          <label class="proxy-label" for="proxyInput">
+            <span>HTTP(S) 代理（可选）</span>
+            <input id="proxyInput" type="url" spellcheck="false" autocomplete="off" placeholder="例如 http://127.0.0.1:7890（留空时自动检测常见本地代理或直连）">
+          </label>
+          <label class="consent"><input type="checkbox" id="consent"> <span>我确认这些账号由我本人持有或已获授权管理。</span></label>
+          <div class="actions">
+            <button id="startButton" class="btn primary" type="button" disabled>导入并授权入池</button>
+            <span class="muted tiny" id="startHint">勾选授权确认后即可批量入池；编辑文本后直接点导入也会自动重检</span>
+          </div>
+        </div>
+
         <div id="previewBox" class="preview hidden">
-          <div class="section-head with-top"><h2><span class="step">02</span> 检查导入内容</h2>
+          <div class="section-head with-top"><h2><span class="step">02</span> 检查导入预览</h2>
             <div class="summary" id="counts"></div></div>
           <div id="validation" class="validation hidden" role="alert"></div>
           <div class="table-wrap"><table>
@@ -62,36 +87,37 @@
           </table></div>
           <p class="footnote">仅显示脱敏邮箱。密码、2FA 密钥、JWT 和邮箱链接不会出现在预览或日志中。</p>
         </div>
-        <div id="actionsBox" class="hidden">
-          <div class="section-head with-top"><h2><span class="step">03</span> 选择导入方式</h2></div>
-          <div class="mode-grid single-mode">
-            <div class="mode-card selected">
-              <span class="mode-head">GPTFree 独立账号池 <span class="recommend">自动后台登录</span></span>
-              <span class="mode-desc">已有 Token 先验证复用；未通过验证的账号采用独立移植的 DSH HTTP OAuth + TOTP 方式登录，无需 Codex CLI，不打开导入网页。</span>
-            </div>
-          </div>
-          <label class="consent"><input type="checkbox" id="consent"> <span>我确认这些账号由我本人持有或已获授权管理。</span></label>
-          <div class="actions"><button id="startButton" class="btn primary" type="button" disabled>导入并授权入池</button>
-            <span class="muted tiny">登录在后台完成，不会因导入而弹出登录浏览器。</span></div>
-        </div>
+
         <div id="progressBox" class="hidden">
-          <div class="section-head with-top"><h2><span class="step">04</span> 导入进度</h2>
+          <div class="section-head with-top"><h2><span class="step">03</span> 批量导入进度</h2>
             <span class="muted" id="progressCaption">准备中…</span></div>
           <div class="progress-track" role="progressbar" aria-label="导入进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="progressTrack"><div id="progressFill"></div></div>
           <div class="stats">
             <div><strong id="doneCount">0</strong><span>已处理</span></div>
-            <div><strong id="addedCount">0</strong><span>成功导入</span></div>
+            <div><strong id="addedCount">0</strong><span>成功入池</span></div>
             <div><strong id="reusedCount">0</strong><span>复用 Token</span></div>
             <div><strong id="failedCount">0</strong><span>失败</span></div>
           </div>
           <div id="events" class="events" role="log" aria-live="polite"></div>
           <div class="actions"><button id="cancelButton" class="btn danger" type="button">停止导入</button>
-            <button id="againButton" class="btn secondary hidden" type="button">导入另一批</button></div>
+            <button id="againButton" class="btn secondary hidden" type="button">清空并导入下一批</button></div>
         </div>
       </section>
+
       <section id="poolPanel" class="panel hidden" role="tabpanel">
-        <div class="section-head"><h2>我的账号池</h2><button id="refreshAccounts" type="button" class="btn secondary small">刷新列表</button></div>
-        <p class="muted">仅展示独立 Token 号池中的脱敏账号。Magpie 原生 Codex 账号请在 Providers 页面查看。</p>
+        <div class="section-head">
+          <h2>我的多账号池</h2>
+          <div class="pool-actions">
+            <button id="refreshAllPool" type="button" class="btn primary small">全部检测 / 刷新授权</button>
+            <button id="refreshAccounts" type="button" class="btn secondary small">刷新列表</button>
+            <button id="goImport" type="button" class="btn secondary small">+ 继续批量导入</button>
+          </div>
+        </div>
+        <p class="muted tiny">已入池的多个账号会在请求时自动轮询并在 401/429 时自动切换；即使之前导入时过期或失败，也可以随时重检/续期或继续追加更多账号。</p>
+        <div class="pool-toolbar">
+          <div id="poolSummary" class="pool-summary">加载中…</div>
+          <input id="poolProxyInput" type="url" class="pool-proxy" spellcheck="false" autocomplete="off" aria-label="刷新用代理地址" placeholder="刷新代理（可选）如 http://127.0.0.1:7890">
+        </div>
         <div id="poolList" class="pool-list"></div>
       </section>
       <div id="notice" class="notice hidden" role="status"></div>

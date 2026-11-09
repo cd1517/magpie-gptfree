@@ -191,7 +191,10 @@ test("discoverPoolModels renews expired multi-account pool and skips failed acco
       return new Response("{}", { status: 401 });
     },
   });
-  assert.deepEqual(Object.keys(models), ["gpt-6"]);
+  assert.deepEqual(Object.keys(models), ["gpt-6", "gpt-image-2"]);
+  assert.equal(models["gpt-6"].api.npm, "@ai-sdk/openai");
+  assert.equal(models["gpt-image-2"].api.npm, "@ai-sdk/openai-compatible");
+  assert.equal(models["gpt-image-2"].capabilities.output.image, true);
 });
 
 test("preferredSlot tries the selected Magpie account first in poolFetch and discoverPoolModels, then fails over", async () => {
@@ -245,7 +248,7 @@ test("preferredSlot tries the selected Magpie account first in poolFetch and dis
       return okModels();
     },
   });
-  assert.deepEqual(Object.keys(catalog), ["gpt-6"]);
+  assert.deepEqual(Object.keys(catalog), ["gpt-6", "gpt-image-2"]);
   assert.deepEqual(probeOrder, ["Bearer " + accountB.accessToken]);
 
   // 4. GPTFreePoolPlugin wires auth.metadata.poolSlot cleanly into loader & models without throwing

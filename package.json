@@ -1,6 +1,6 @@
 {
   "name": "magpie-gptfree",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Magpie embedded GUI bulk importer with independent DSH-style HTTP/TOTP authentication",
   "type": "module",
   "main": "./index.mjs",
@@ -18,7 +18,8 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "check": "node --check index.mjs && node --check lib/dsh-http-auth.mjs && node --check bin/import.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs && node --check lib/gui-service.mjs && node --check gui/app.js && node --check gui/entry.js && node --check lib/pool-connection.mjs && node --check lib/native-file-dialog.mjs && node --check lib/provider-native-signin.mjs"
+    "test:python": "python -m unittest discover -s python -p \"test_*.py\" -v",
+    "check": "node --check index.mjs && node --check lib/dsh-http-auth.mjs && node --check lib/chatgpt-web-image.mjs && node --check bin/import.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs && node --check lib/gui-service.mjs && node --check gui/app.js && node --check gui/entry.js && node --check lib/pool-connection.mjs && node --check lib/native-file-dialog.mjs && node --check lib/provider-native-signin.mjs"
   },
   "engines": {
     "node": ">=20"

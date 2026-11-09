@@ -2,7 +2,7 @@
 
 **Magpie 窗口内的账号导入表单**，支持选择或拖入 TXT 直接填入可编辑文本框、按行预览与修正、跳过错误行、多批次追加、批量检测/刷新以及多账号自动轮询与故障转移。无需终端操作、不单独打开 GPTFree 导入网页，不依赖 DSH 插件或服务。
 
-> 当前版本 v0.5.0：基于独立 Python HTTP worker（DSH 风格密码/TOTP 认证）移植实现。**代码和模拟测试不代表真实 OpenAI 账号已完成端到端验收。** 请勿把 Platform OAuth 获取成功等同于 Magpie Codex 模型可用。
+> 当前版本 v0.6.0：基于独立 Python HTTP worker（DSH 风格密码/TOTP 认证）与独立 ChatGPT Web `picture_v2` 生图/改图 worker 实现。**代码和模拟测试不代表真实 OpenAI 账号已完成端到端验收。** 请勿把 Platform OAuth 获取成功等同于 Magpie Codex 或 ChatGPT Web `picture_v2` 全部接口可用。
 
 ## 一、用户界面
 
@@ -49,17 +49,19 @@ Magpie 的 **Providers → 来自插件 → GPTFree Codex Pool** 使用 Magpie �
 - Python 进程通过 stdin 接收账号和 TOTP，stdout JSON 由插件读取，原始密码和 Token 不会写入普通 GUI 事件和 Magpie provider 登录元数据。
 - 已有有效 JWT 可优先验证复用；被服务器拒绝或过期时自动进行 HTTP 重新授权；账号池仍使用本地 AES-256-GCM。
 
-### 重要兼容性边界
+### 重要兼容性边界与图片模型说明（v0.6.0）
 
-**DSH 认证拿到的是 OpenAI Platform OAuth Token，Magpie 现有供应商请求的是 ChatGPT Codex 服务。两种凭证不能假设相互通用。** 本插件只有在目标服务实际接受 Token、模型列表验证成功后才将账号计入可用号池；失败时会显示「Platform Token 未通过 Magpie 模型访问验证」，不会把登录成功误算成模型可调用。
-
-这一点必须通过拥有合法使用权限的账号完成真实端到端验证。如果不兼容，后续需要重新实现目标服务的认证/请求适配，而不是跳过服务器验证或伪造成功。
+- **为什么之前只有 Codex 对话模型、没有图片模型**：OpenAI 的 `/backend-api/codex/models` 只下发编程/对话 slug（如 `GPT-6-Luna`、`GPT-5.6-Terra`），且 Magpie 内置 Codex 图像能力仅对原生 `"codex"` 账户生效、不自动套用于 `"plugin"` 提供商。
+- **普号生图/改图适配（`gpt-image-2`）**：从 `v0.6.0` 起，只要号池中至少有一个账号通过校验，`discoverPoolModels` 会在保留 Codex 对话模型（`@ai-sdk/openai` → `/responses`）的同时额外暴露 `gpt-image-2`（`api.npm = "@ai-sdk/openai-compatible"` + 图像输入输出能力声明），使 **Magpie 设置 → 图片（Images）** 与提供商模型测试识别该绘图模型。
+- **独立生图链路**：`POST /images/generations` 与 `POST /images/edits`（支持 `multipart/form-data` 原图 + `mask` PNG 透明蒙版合成 + `markup` 标记图）通过独立 Python worker（`python/image_worker.py` + `utils/web_pow.py` + `utils/turnstile.py`，仅依赖已有 `curl_cffi` 与 Python 标准库）走 ChatGPT Web `/backend-api/f/conversation`（`system_hints: ["picture_v2"]`）执行异步生图与轮询取回，支持单次 `n=1..4`、优先路由所选账号槽位、401 自动重登重试、429/5xx 号池自动故障转移，并在 400 内容政策拒答时立即返回错误而不消耗其余账号。
+- **兼容边界**：DSH HTTP 登录获取的是 **OpenAI Platform OAuth** Token，而 Codex `/codex/models` 与 ChatGPT Web `picture_v2` 对 Token 来源和账户状态都有各自校验。若通过 4/5 列 TXT 导入的本身是兼容 `chatgpt.com` 的 Access Token 则可直接复用；若 `picture_v2` 拒绝当前 Token，会在号池自动重试/刷新或返回清晰错误，请以真实账号在 Magpie 中实测为准。
 
 ## 四、本地开发与测试
 
 ```bash
 npm run check
 npm test
+npm run test:python
 ```
 
 Python worker 在登录时自动创建隔离环境。需要 Python 3 和首次依赖下载。Node.js 20+，Magpie 需支持 `magpie.page.service`。

@@ -220,6 +220,9 @@ class ImageWorkerUnitTests(unittest.TestCase):
             if method == "GET" and url.endswith("/backend-api/files/file_00000000111122223333444455556666/download"):
                 return FakeResponse(json_data={"download_url": "https://files.oaiusercontent.com/out.png"})
             if method == "GET" and url == "https://files.oaiusercontent.com/out.png":
+                hdrs = kwargs.get("headers") or {}
+                self.assertNotIn("Authorization", hdrs)
+                self.assertNotIn("Origin", hdrs)
                 return FakeResponse(content=output_png)
             if method == "PATCH" and url == "https://chatgpt.com/backend-api/conversation/conv-1":
                 self.assertEqual(kwargs["json"], {"is_visible": False})
@@ -371,6 +374,38 @@ class ImageWorkerUnitTests(unittest.TestCase):
         )
         self.assertEqual(res_policy["http_status"], 400)
         self.assertEqual(res_policy["error_code"], "content_policy_violation")
+
+    def test_estuary_download_isolates_headers_and_deduplicates_same_asset_id(self):
+        output_png = _make_rgba_png(2, 2, [(9, 8, 7, 255)] * 4)
+        estuary_url = "https://chatgpt.com/backend-api/estuary/content?id=file_00000000aaaabbbbccccdddd11112222&sig=abc"
+        seen_urls: list[str] = []
+
+        def handler(method, url, kwargs):
+            seen_urls.append(f"{method} {url}")
+            if method == "GET" and url.endswith("/backend-api/files/file_00000000aaaabbbbccccdddd11112222/download"):
+                return FakeResponse(json_data={"download_url": estuary_url})
+            if method == "GET" and "/attachment/" in url:
+                raise AssertionError("Should not double-query attachment endpoint for same already-resolved asset id")
+            if method == "GET" and url == estuary_url:
+                hdrs = kwargs.get("headers") or {}
+                self.assertEqual(hdrs.get("Authorization"), "Bearer tok-estuary")
+                self.assertEqual(hdrs.get("Referer"), "https://chatgpt.com/")
+                self.assertNotIn("Origin", hdrs)
+                self.assertNotIn("OAI-Device-Id", hdrs)
+                self.assertNotIn("Sec-Fetch-Mode", hdrs)
+                return FakeResponse(content=output_png)
+            raise AssertionError(f"Unexpected call: {method} {url}")
+
+        session = FakeSession(handler)
+        with image_worker.OpenAIWebImageClient("tok-estuary", session=session) as client:
+            urls = client._resolve_image_urls(
+                "conv-est",
+                ["file_00000000aaaabbbbccccdddd11112222"],
+                ["file_00000000aaaabbbbccccdddd11112222"],
+            )
+            self.assertEqual(urls, [estuary_url])
+            imgs = client._download_image_bytes(urls)
+            self.assertEqual(imgs, [output_png])
 
 
 if __name__ == "__main__":

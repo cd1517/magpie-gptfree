@@ -8,6 +8,7 @@ import { CODEX_BASE, discoverPoolModels, poolFetch } from "../lib/codex-pool.mjs
 import {
   IMAGE_MODEL_ID,
   buildImageModelCatalog,
+  executeWebImageGeneration,
   parseImageRequest,
   runWebImageWorker,
 } from "../lib/chatgpt-web-image.mjs";
@@ -240,4 +241,29 @@ test("runWebImageWorker supports real Python IPC, Chinese UTF-8 payloads, and Ab
   } finally {
     await rm(tmp, { recursive: true, force: true });
   }
+});
+
+test("executeWebImageGeneration stops rotating once maxTotalMs budget is exhausted", async () => {
+  const accounts = [1, 2, 3, 4].map((n) => ({
+    email: `u${n}@example.com`,
+    password: "p",
+    totp: seed,
+    accessToken: jwt(3600, `u${n}@example.com`),
+  }));
+  let calls = 0;
+  await assert.rejects(
+    executeWebImageGeneration({
+      accounts,
+      request: { model: IMAGE_MODEL_ID, prompt: "cat", n: 1 },
+      reauthenticate: async (a) => a,
+      maxTotalMs: 20,
+      runWorker: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 35));
+        return { ok: false, http_status: 502, error_code: "upstream_error", error: "transient glitch" };
+      },
+    }),
+    (err) => err.status === 503 && /transient glitch/.test(err.message),
+  );
+  assert.equal(calls, 1);
 });

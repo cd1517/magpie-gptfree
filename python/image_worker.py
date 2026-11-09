@@ -858,6 +858,7 @@ class OpenAIWebImageClient:
         if session is not None:
             self.session = session
             self._owns_session = False
+            self.proxy_url = ""
         else:
             if requests is None:
                 raise ImageWorkerError(
@@ -865,10 +866,10 @@ class OpenAIWebImageClient:
                     http_status=500,
                     error_code="dependencies_missing",
                 )
+            self.proxy_url = resolve_proxy(proxy)
             session_kwargs: Dict[str, Any] = {"impersonate": "chrome110", "verify": True}
-            proxy_url = resolve_proxy(proxy)
-            if proxy_url:
-                session_kwargs["proxy"] = proxy_url
+            if self.proxy_url:
+                session_kwargs["proxy"] = self.proxy_url
             self.session = requests.Session(**session_kwargs)
             self._owns_session = True
 
@@ -893,8 +894,6 @@ class OpenAIWebImageClient:
             "OAI-Client-Build-Number": DEFAULT_CLIENT_BUILD_NUMBER,
             "Authorization": f"Bearer {self.access_token}",
         }
-        if hasattr(self.session, "headers") and isinstance(getattr(self.session, "headers", None), dict):
-            self.session.headers.update(self._base_headers)
 
     def close(self) -> None:
         if getattr(self, "_closed", False):
@@ -1524,6 +1523,7 @@ class OpenAIWebImageClient:
 
     def _resolve_image_urls(self, conversation_id: str, file_ids: list[str], sediment_ids: list[str]) -> list[str]:
         urls: list[str] = []
+        resolved_ids: set[str] = set()
         for file_id in file_ids:
             if not file_id or file_id == "file_upload":
                 continue
@@ -1539,6 +1539,7 @@ class OpenAIWebImageClient:
                         url = str(data.get("download_url") or data.get("url") or "").strip()
                         if url:
                             _validate_https_url(url, "download_url")
+                            resolved_ids.add(file_id)
                             if url not in urls:
                                 urls.append(url)
                             break
@@ -1551,6 +1552,8 @@ class OpenAIWebImageClient:
 
         if conversation_id and sediment_ids:
             for sediment_id in sediment_ids:
+                if not sediment_id or sediment_id in resolved_ids:
+                    continue
                 path = f"/backend-api/conversation/{conversation_id}/attachment/{sediment_id}/download"
                 try:
                     resp = self.session.get(
@@ -1563,6 +1566,7 @@ class OpenAIWebImageClient:
                         url = str(data.get("download_url") or data.get("url") or "").strip()
                         if url:
                             _validate_https_url(url, "download_url")
+                            resolved_ids.add(sediment_id)
                             if url not in urls:
                                 urls.append(url)
                     elif int(getattr(resp, "status_code", 0) or 0) == 401:
@@ -1578,7 +1582,34 @@ class OpenAIWebImageClient:
         seen_hashes: set[str] = set()
         for url in urls:
             safe_url = _validate_https_url(url, "download_url")
-            resp = self.session.get(safe_url, timeout=120)
+            host = (urlparse(safe_url).hostname or "").lower()
+            is_chatgpt_host = host == "chatgpt.com" or host.endswith(".chatgpt.com")
+            dl_headers: Dict[str, str] = {
+                "User-Agent": self.user_agent,
+                "Accept": "image/avif,image/webp,image/png,*/*",
+            }
+            if is_chatgpt_host:
+                # /backend-api/estuary/content returns 404 when polluted with Origin/OAI-*/Sec-Fetch-Mode:cors;
+                # send only clean Bearer + Referer on chatgpt.com and never leak Bearer to external CDN hosts.
+                dl_headers["Authorization"] = f"Bearer {self.access_token}"
+                dl_headers["Referer"] = self.base_url + "/"
+
+            if self._owns_session and requests is not None:
+                dl_kwargs: Dict[str, Any] = {"impersonate": "chrome110", "verify": True}
+                if getattr(self, "proxy_url", ""):
+                    dl_kwargs["proxy"] = self.proxy_url
+                dl_session = requests.Session(**dl_kwargs)
+                try:
+                    if is_chatgpt_host and getattr(self.session, "cookies", None):
+                        try:
+                            dl_session.cookies.update(self.session.cookies)
+                        except Exception:
+                            pass
+                    resp = dl_session.get(safe_url, headers=dl_headers, timeout=120)
+                finally:
+                    dl_session.close()
+            else:
+                resp = self.session.get(safe_url, headers=dl_headers, timeout=120)
             self._ensure_ok(resp, "image_download")
             content = bytes(getattr(resp, "content", b"") or b"")
             if not content:

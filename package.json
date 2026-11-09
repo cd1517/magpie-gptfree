@@ -1,7 +1,7 @@
 {
   "name": "magpie-gptfree",
-  "version": "0.2.2",
-  "description": "Magpie GUI ChatGPT import with Providers tile opening the secure GUI and auto-activating the account pool",
+  "version": "0.3.0",
+  "description": "Magpie-native GUI batch ChatGPT import with OS file picker and inline status",
   "type": "module",
   "main": "./index.mjs",
   "bin": {
@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "check": "node --check index.mjs && node --check bin/import.mjs && node --check lib/oauth.mjs && node --check lib/login.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs && node --check lib/gui-service.mjs && node --check gui/app.js && node --check gui/entry.js && node --check lib/pool-connection.mjs"
+    "check": "node --check index.mjs && node --check bin/import.mjs && node --check lib/oauth.mjs && node --check lib/login.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs && node --check lib/gui-service.mjs && node --check gui/app.js && node --check gui/entry.js && node --check lib/pool-connection.mjs && node --check lib/native-file-dialog.mjs && node --check lib/provider-native-signin.mjs"
   },
   "engines": {
     "node": ">=20"

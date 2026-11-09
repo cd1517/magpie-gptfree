@@ -6,6 +6,7 @@
 import { CODEX_BASE, discoverPoolModels, poolFetch } from "./lib/codex-pool.mjs";
 import { GUI_PORT, startGuiServer } from "./lib/gui-service.mjs";
 import { createPoolConnector, POOL_MARKER } from "./lib/pool-connection.mjs";
+import { nativeImportMethod } from "./lib/provider-native-signin.mjs";
 
 export const GPTFreeGuiPlugin = async (ctx, options) => {
   const raw = options?.port ?? GUI_PORT;
@@ -47,34 +48,9 @@ export const GPTFreePoolPlugin = async () => ({
     provider: "gptfree-pool",
     maxConcurrency: 2,
     single: true,
-    // Magpie's Providers page REQUIRES a sign-in method for an unsigned
-    // provider. This single method opens our GUI; it never asks for
-    // email/password/2FA or a standalone API key here. GUI import itself
-    // performs OAuth and activates the pool as soon as an account succeeds.
-    methods: [{
-      type: "oauth",
-      label: "打开 GPTFree 图形界面导入账号",
-      async authorize(_inputs, { signal } = {}) {
-        const service = await startGuiServer({ port: GUI_PORT });
-        const entry = service.issueProviderEntry();
-        return {
-          url: entry.url,
-          method: "auto",
-          instructions: "在打开的 GPTFree 图形界面中选择 TXT 文件并点击「开始批量导入」。首次成功入池后 Magpie 将自动完成此步骤，不需要另外登录。",
-          async callback(_code, { signal: callbackSignal } = {}) {
-            const outcome = await entry.wait({ signal: callbackSignal || signal });
-            if (!outcome.ok) {
-              return { type: "failed", error: outcome.error || "导入尚未完成，请在 GPTFree GUI 中查看详细状态" };
-            }
-            return {
-              type: "success",
-              key: POOL_MARKER,
-              metadata: { accountId: "GPTFree local pool" },
-            };
-          },
-        };
-      },
-    }],
+    // Native Magpie file chooser; never opens an importer website.
+    // The full preview/progress GUI stays in the in-app Plugins page.
+    methods: [nativeImportMethod()],
     async loader(getAuth) {
       const auth = await getAuth();
       if (auth?.type !== "api") return {};

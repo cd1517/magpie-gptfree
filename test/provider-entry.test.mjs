@@ -1,116 +1,162 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { request as httpRequest } from "node:http";
 import { createGuiService } from "../lib/gui-service.mjs";
 import { GPTFreePoolPlugin } from "../index.mjs";
+import { nativeImportMethod } from "../lib/provider-native-signin.mjs";
+import { pickAccountTxt, NATIVE_PICKER_COMMANDS } from "../lib/native-file-dialog.mjs";
+import { POOL_MARKER } from "../lib/pool-connection.mjs";
 
 const seed = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
-async function serviceHarness({ batch } = {}) {
+async function txtTemp(content = "user@example.com----password----" + seed) {
+  const dir = await mkdtemp(join(tmpdir(), "magpie-native-test-"));
+  const path = join(dir, "accounts.txt");
+  await writeFile(path, content, { mode: 0o600 });
+  return { path, close: () => rm(dir, { recursive: true, force: true }) };
+}
+async function harness({ batch } = {}) {
   const service = createGuiService({ port: 0, batch });
-  const addr = await service.listen();
-  const base = "http://127.0.0.1:" + addr.port;
-  const open = async () => {
-    const ticket = service.issueProviderEntry({ ttlMs: 30000 });
-    const htmlResp = await fetch(ticket.url);
-    const html = await htmlResp.text();
-    const session = html.match(/meta name="gptfree-session" content="([a-f0-9]{64})"/)?.[1];
-    assert.equal(htmlResp.status, 200);
-    assert(session);
-    assert.match(html, /data-entry="provider"/);
-    return { ticket, session };
-  };
-  const api = async (session, route, body, origin = base) => {
+  const address = await service.listen();
+  const base = "http://127.0.0.1:" + address.port;
+  const page = await (await fetch(base + "/ui")).text();
+  const session = page.match(/meta name="gptfree-session" content="([a-f0-9]{64})"/)?.[1];
+  assert(session);
+  const api = async (route, body, origin = "null") => {
     const response = await fetch(base + "/api/" + route, {
       method: body === undefined ? "GET" : "POST",
       headers: {
-        "X-GPTFree-Session": session,
-        Origin: origin,
+        Origin: origin, "X-GPTFree-Session": session,
         ...(body === undefined ? {} : { "Content-Type": "application/json" }),
       },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
     return { status: response.status, data: await response.json() };
   };
-  return { service, base, open, api, close: () => service.close() };
+  return { service, base, page, api, close: () => service.close() };
 }
 
-test("Providers card advertises a single GUI-entry OAuth method, not an empty list", async () => {
+test("Providers uses a URL-less OAuth OS file dialog, NOT an importer browser URL", async () => {
   const plugin = await GPTFreePoolPlugin();
   assert.equal(plugin.auth.provider, "gptfree-pool");
   assert.equal(plugin.auth.single, true);
   assert.equal(plugin.auth.methods.length, 1);
   assert.equal(plugin.auth.methods[0].type, "oauth");
-  assert.match(plugin.auth.methods[0].label, /图形界面导入账号/);
+  assert.equal(plugin.auth.methods[0].keyless, undefined);
+  assert.equal(plugin.auth.methods[0].label.includes("TXT"), true);
+  assert.equal(typeof plugin.auth.methods[0].authorize, "function");
 });
 
-test("Providers URL serves the import GUI and completes on first successful pool account", async () => {
-  let started = 0;
-  const h = await serviceHarness({
-    batch: async (opts) => {
-      started++;
-      assert.equal(opts.mode, "pool");
-      opts.onProgress({ state: "token_reused", line: 1, email: "us***@example.com" });
-      return { total: 1, added: 1, reused: 1, failed: [] };
+test("Windows native picker invokes a system OpenFileDialog, never a shell or browser", async () => {
+  let used;
+  const value = await pickAccountTxt({
+    platform: "win32",
+    runner: async (bin, args, opts) => {
+      used = { bin, args, opts };
+      return { stdout: "C:\\my accounts\\list.txt\r\n" };
+    },
+  });
+  assert.equal(value, "C:\\my accounts\\list.txt");
+  assert.equal(used.bin, "powershell.exe");
+  assert.equal(used.opts.shell, false);
+  assert.equal(used.opts.windowsHide, true);
+  assert.equal(used.args.includes("-STA"), true);
+  assert.equal(used.args.join(" ").includes("OpenFileDialog"), true);
+  for (const [os, cmd] of Object.entries(NATIVE_PICKER_COMMANDS)) {
+    assert(["win32", "darwin", "linux"].includes(os));
+    assert(!cmd.args.join(" ").includes("http://"));
+  }
+});
+
+test("native pick cancel returns failure without storing fake login", async () => {
+  const method = nativeImportMethod({
+    picker: async () => "",
+    server: async () => { throw new Error("server should not start"); },
+  });
+  assert.deepEqual(method.type, "oauth");
+  const result = await method.authorize();
+  assert.equal(result.type, "failed");
+  assert.match(result.error, /取消/);
+});
+
+test("native provider chooser starts batch in Magpie host and signs in after first import", async () => {
+  const file = await txtTemp();
+  const h = await harness({
+    batch: async (args) => {
+      assert.equal(args.mode, "pool");
+      assert.equal(args.consent, true);
+      assert.equal(await args.read(), "user@example.com----password----" + seed);
+      args.onProgress({ state: "authorizing", email: "us***@example.com", line: 1 });
+      args.onProgress({ state: "token_reused", email: "us***@example.com", line: 1 });
+      return { total: 1, added: 1, reused: 1, failed: [], duplicates: 0 };
     },
   });
   try {
-    const { ticket, session } = await h.open();
-    const text = "user@example.com----pw----" + seed;
-    assert.equal((await h.api(session, "preview", { text })).status, 200);
-    assert.equal((await h.api(session, "start", { mode: "pool", consent: true })).status, 202);
-    const outcome = await ticket.wait();
-    assert.deepEqual(outcome, { ok: true, error: "" });
-    assert.equal(started, 1);
-  } finally { await h.close(); }
+    const method = nativeImportMethod({
+      picker: async () => file.path,
+      server: async () => h.service,
+    });
+    const started = await method.authorize();
+    assert.equal(started.url, "");
+    assert.equal(started.opened, true);
+    assert.equal(started.method, "auto");
+    const result = await started.callback();
+    assert.equal(result.type, "success");
+    assert.equal(result.key, POOL_MARKER);
+    assert(!JSON.stringify(result).includes("password"));
+    assert(!JSON.stringify(result).includes(seed));
+    let status;
+    for (let i = 0; i < 30; i++) {
+      status = (await h.api("status")).data;
+      if (status.state === "completed") break;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    assert.equal(status.state, "completed");
+    assert.equal(status.result.added, 1);
+    assert.equal(status.result.reused, 1);
+    assert.equal(status.events.at(-1).state, "token_reused");
+  } finally { await h.close(); await file.close(); }
 });
 
-test("Provider GUI import rejects native Codex mode; the sidebar keeps that option", async () => {
-  const h = await serviceHarness({
-    batch: async () => { throw Error("should not start"); },
+test("native provider all-failed import never marks Magpie as signed in", async () => {
+  const file = await txtTemp();
+  const h = await harness({
+    batch: async (args) => {
+      args.onProgress({ state: "failed", email: "us***@example.com", line: 1, reason: "授权失败" });
+      return { total: 1, added: 0, reused: 0, failed: [{ line: 1 }], duplicates: 0 };
+    },
   });
   try {
-    const { ticket, session } = await h.open();
-    await h.api(session, "preview", { text: "user@example.com----pw----" + seed });
-    const response = await h.api(session, "start", { mode: "native", consent: true });
-    assert.equal(response.status, 422);
-    assert.match(response.data.error, /Token 号池/);
-    const direct = await fetch(h.base + "/ui");
-    assert.equal(direct.status, 200);
-    assert.match(await direct.text(), /data-entry="sidebar"/);
-  } finally { await h.close(); }
+    const method = nativeImportMethod({
+      picker: async () => file.path, server: async () => h.service,
+    });
+    const started = await method.authorize();
+    assert.equal(started.url, "");
+    const result = await started.callback();
+    assert.equal(result.type, "failed");
+    assert.match(result.error, /没有账号成功入池/);
+  } finally { await h.close(); await file.close(); }
 });
 
-test("failed pool import never pretends Magpie signed in", async () => {
-  const h = await serviceHarness({
-    batch: async () => ({ total: 1, added: 0, reused: 0, failed: [{ line: 1, reason: "failed" }] }),
-  });
+test("the only import web UI is Magpie's sandboxed page; old browser tickets are rejected", async () => {
+  const h = await harness();
   try {
-    const { ticket, session } = await h.open();
-    await h.api(session, "preview", { text: "user@example.com----pw----" + seed });
-    assert.equal((await h.api(session, "start", { mode: "pool", consent: true })).status, 202);
-    const result = await ticket.wait();
-    assert.equal(result.ok, false);
-    assert.match(result.error, /没有账号成功/);
-  } finally { await h.close(); }
-});
-
-test("invalid ticket is rejected; different browser origins and rebinding hosts cannot import", async () => {
-  const h = await serviceHarness();
-  try {
+    assert.match(h.page, /data-entry="sidebar"/);
+    assert.match(h.page, /选择账号文件/);
     const wrong = await fetch(h.base + "/ui?ticket=" + "f".repeat(48));
     assert.equal(wrong.status, 410);
-    const { session } = await h.open();
-    assert.equal((await h.api(session, "preview", { text: "user@example.com----pw" }, "https://other.example")).status, 403);
-    // fetch() normalizes the Host header; raw HTTP is needed to test
-    // DNS-rebinding defense against a forged Host.
-    const status = await new Promise((resolve, reject) => {
+    assert.equal((await h.api("preview", { text: "user@example.com----pw" }, "https://outside.example")).status, 403);
+    assert.equal((await h.api("preview", { text: "user@example.com----pw" }, h.base)).status, 403);
+    const hostStatus = await new Promise((resolve, reject) => {
       const req = httpRequest(h.base + "/api/status", {
         method: "GET",
-        headers: { Host: "outside.invalid", Origin: "null", "X-GPTFree-Session": session },
+        headers: { Host: "outside.invalid", Origin: "null", "X-GPTFree-Session": "1".repeat(64) },
       }, (res) => { res.resume(); res.on("end", () => resolve(res.statusCode)); });
       req.on("error", reject);
       req.end();
     });
-    assert.equal(status, 403);
+    assert.equal(hostStatus, 403);
   } finally { await h.close(); }
 });

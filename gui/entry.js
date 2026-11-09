@@ -13,6 +13,23 @@
     const target = new URL("ui", base);
     if (target.protocol !== "http:" && target.protocol !== "https:")
       throw new Error("本地服务地址无效");
+    // Same as the community magpie-chat page: WebKit can silently leave
+    // the sandboxed frame on this bootstrap screen when localhost isn't
+    // ready. Offer an IN-MAGPIE retry, not an external browser page.
+    setTimeout(() => {
+      const stillHere = document.querySelector("#state");
+      if (!stillHere) return;
+      stillHere.textContent = "本地导入服务尚未连接，请检查插件是否启用后重试。";
+      if (!document.querySelector("#retry")) {
+        const retry = document.createElement("button");
+        retry.id = "retry";
+        retry.type = "button";
+        retry.textContent = "重新连接";
+        retry.addEventListener("click", () => location.reload());
+        stillHere.parentNode.appendChild(retry);
+      }
+    }, 6000);
+    // Navigates only this sandboxed iframe, NEVER opens a browser tab.
     location.replace(target.href);
   } catch {
     status.textContent = "无法连接 GUI 后端。请确保插件已启用，并检查本地服务端口是否被占用。";

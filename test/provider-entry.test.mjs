@@ -45,8 +45,15 @@ test("Providers uses a URL-less OAuth OS file dialog, NOT an importer browser UR
   assert.equal(plugin.auth.methods.length, 1);
   assert.equal(plugin.auth.methods[0].type, "oauth");
   assert.equal(plugin.auth.methods[0].keyless, undefined);
-  assert.equal(plugin.auth.methods[0].label.includes("TXT"), true);
+  assert.equal(plugin.auth.methods[0].label.includes("GPTFree"), true);
   assert.equal(typeof plugin.auth.methods[0].authorize, "function");
+  assert.deepEqual(plugin.auth.methods[0].prompts.map((p) => [p.type, p.key]), [
+    ["select", "source"],
+    ["select", "ownership"],
+  ]);
+  assert.equal(plugin.auth.methods[0].prompts[1].when.key, "source");
+  assert.equal(plugin.auth.methods[0].prompts[1].when.value, "txt");
+  assert.deepEqual(plugin.auth.methods[0].prompts[0].options.map((o) => o.value), ["txt", "existing"]);
 });
 
 test("Windows native picker invokes a system OpenFileDialog, never a shell or browser", async () => {
@@ -76,9 +83,9 @@ test("native pick cancel returns failure without storing fake login", async () =
     server: async () => { throw new Error("server should not start"); },
   });
   assert.deepEqual(method.type, "oauth");
-  const result = await method.authorize();
+  const result = await method.authorize({ source: "txt", ownership: "yes" });
   assert.equal(result.type, "failed");
-  assert.match(result.error, /取消/);
+  assert.match(result.error, /未选择/);
 });
 
 test("native provider chooser starts batch in Magpie host and signs in after first import", async () => {
@@ -98,7 +105,7 @@ test("native provider chooser starts batch in Magpie host and signs in after fir
       picker: async () => file.path,
       server: async () => h.service,
     });
-    const started = await method.authorize();
+    const started = await method.authorize({ source: "txt", ownership: "yes" });
     assert.equal(started.url, "");
     assert.equal(started.opened, true);
     assert.equal(started.method, "auto");
@@ -132,7 +139,7 @@ test("native provider all-failed import never marks Magpie as signed in", async 
     const method = nativeImportMethod({
       picker: async () => file.path, server: async () => h.service,
     });
-    const started = await method.authorize();
+    const started = await method.authorize({ source: "txt", ownership: "yes" });
     assert.equal(started.url, "");
     const result = await started.callback();
     assert.equal(result.type, "failed");
@@ -159,4 +166,50 @@ test("the only import web UI is Magpie's sandboxed page; old browser tickets are
     });
     assert.equal(hostStatus, 403);
   } finally { await h.close(); }
+});
+
+test("clicking plugin without submitting the native form must not open any file chooser", async () => {
+  let pickCalls = 0, serverCalls = 0;
+  const method = nativeImportMethod({
+    picker: async () => { pickCalls++; return "/tmp/should-not-open.txt"; },
+    server: async () => { serverCalls++; throw Error("not expected"); },
+    readPool: async () => [],
+  });
+  for (const inputs of [undefined, {}, { source: "txt" }, { source: "txt", ownership: "no" }, { source: "unknown" }]) {
+    const result = await method.authorize(inputs);
+    assert.equal(result.type, "failed");
+  }
+  assert.equal(pickCalls, 0, "file picker must not appear on provider-name click");
+  assert.equal(serverCalls, 0);
+});
+
+test("the native form can reconnect an already imported pool without an extra file picker", async () => {
+  let pickCalls = 0, readCalls = 0;
+  const method = nativeImportMethod({
+    picker: async () => { pickCalls++; throw Error("no file picker"); },
+    server: async () => { throw Error("no GUI service needed"); },
+    readPool: async () => {
+      readCalls++;
+      return [{ email: "saved@example.com", password: "redacted",
+        totp: "", accessToken: "opaque.token.value" }];
+    },
+  });
+  const started = await method.authorize({ source: "existing" });
+  assert.equal(started.url, "");
+  const result = await started.callback();
+  assert.equal(result.type, "success");
+  assert.equal(result.key, POOL_MARKER);
+  assert.equal(readCalls, 1);
+  assert.equal(pickCalls, 0);
+  assert(!JSON.stringify(result).includes("opaque.token.value"));
+});
+
+test("empty existing pool is rejected without creating a fake Magpie login", async () => {
+  const method = nativeImportMethod({
+    readPool: async () => [],
+    picker: async () => { throw Error("do not open"); },
+  });
+  const result = await method.authorize({ source: "existing" });
+  assert.equal(result.type, "failed");
+  assert.match(result.error, /号池为空/);
 });

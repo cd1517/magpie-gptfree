@@ -1,7 +1,7 @@
 {
   "name": "magpie-gptfree",
-  "version": "0.3.0",
-  "description": "Magpie-native GUI batch ChatGPT import with OS file picker and inline status",
+  "version": "0.3.1",
+  "description": "Magpie-native ChatGPT bulk import form shown before file selection",
   "type": "module",
   "main": "./index.mjs",
   "bin": {

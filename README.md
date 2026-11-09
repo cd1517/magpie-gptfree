@@ -8,14 +8,14 @@
 
 1. 打开 Magpie 桌面版的 **Plugins（插件）** 页面，点击 **Add a plugin（添加插件）**，输入 `https://github.com/yang0/magpie-gptfree`，或选择已下载的本仓库文件夹。启用插件。
 2. **推荐：Magpie 左侧 Plugins → GPTFree 账号导入**。这是在 Magpie 主窗口内的完整插件页面（和社区 magpie-chat 的接入方式一致），可直接拖入 TXT、点击文件选择、预览脱敏账号、开始导入并查看逐行进度，**不会打开额外的 GPTFree 导入网页**。
-   - 也支持 **Providers → 添加供应商 → 来自插件 → GPTFree Codex Pool**：点击卡片后直接弹出**系统原生 TXT 文件选择对话框**，选好文件就自动开始 Token 号池登录；登录结果回填 Magpie。该入口不会出现导入网页，但批量进度应在 Magpie 左侧 GPTFree 页面查看。
+   - 也支持 **Providers → 添加供应商 → 来自插件 → GPTFree Codex Pool**：点击名称首先出现 **Magpie 自己的登录表单**，先选择「从 TXT 文件批量导入」或「使用本机已有账号池」。选择 TXT 时会再询问账号授权确认；**完成表单后**才弹出系统 TXT 文件选择框，选定即开始批量自动登录。取消表单不会自动弹文件框，也不会假装登录成功。
    - Providers 入口直接导入到独立 Token 号池；如果需要选择「原生 Codex」模式，请使用左侧完整 GUI。
 3. 在左侧 GUI **点击「选择文件」或拖入 TXT 文件**。页面自动解析最多 100 条账号，展示掩码邮箱、三/四字段类型、JWT 过期状态、重复项和格式错误。明文密码、TOTP 和 Token 均不显示。
 4. 选择 **独立 Token 号池**（默认）或 **原生 Codex 导入**，勾选账号归属确认，点击 **开始批量导入**。
 5. 查看每条账号的状态、成功数、复用数、失败原因。支持 **停止导入**。使用「我的账号池」查看和移除独立池的账号。
 6. **无需另外填写账号密码、API Key 或点击第二次「登录/启用」**：选择 Token 号池模式时，任意账号成功授权入池，插件就会自动把 `gptfree-pool` 连接到 Magpie；成功后直接在 Agent 里选择实际验证可用的模型。原生 Codex 模式则会自动导入 Magpie 原生账号列表。
 
-> 导入 GUI 内嵌于 Magpie；插件服务只监听本机 `127.0.0.1:37986`，供框架内部页面使用，不会额外打开 GPTFree 网站。Providers 入口使用 Windows/macOS/Linux 系统文件选择器。**账号 OAuth 过程中如果需要官方安全验证，仍可能打开官方登录页面**，这与额外打开“导入管理网页”不同。真实 Windows Magpie + 账号端到端仍待验证。
+> 导入 GUI 内嵌于 Magpie；插件服务只监听本机 `127.0.0.1:37986`，供框架内部页面使用，不会额外打开 GPTFree 网站。Providers 入口**先出现 Magpie 原生选择/确认表单**，用户提交后再使用 Windows/macOS/Linux 系统文件选择器。**账号 OAuth 过程中如果需要官方安全验证，仍可能打开官方登录页面**，这与额外打开“导入管理网页”不同。真实 Windows Magpie + 账号端到端仍待验证。
 
 ## 支持的账号格式
 
@@ -66,7 +66,7 @@ npm test
 
 高级 CLI 仍保留在 `bin/import.mjs`，但不再是常规导入入口。
 
-**登录是导入流程的一部分**：只有在官方提示额外安全验证时需要操作登录窗口。Providers 的 GPTFree 入口通过无网页 OAuth 流程使用系统文件选择器，选完 TXT 自动开始入池；左侧 Plugins 入口始终在 Magpie 内展示完整 GUI。
+**登录是导入流程的一部分**：只有在官方提示额外安全验证时需要操作登录窗口。Providers 的 GPTFree 入口通过无网页 OAuth 流程先展示 Magpie 的原生选择/确认表单，提交后才打开系统文件选择器并自动入池；左侧 Plugins 入口始终在 Magpie 内展示完整 GUI。
 
 开发记录：[GUI Issue #3](https://github.com/yang0/magpie-gptfree/issues/3) · [原账号池 Issue #1](https://github.com/yang0/magpie-gptfree/issues/1)。
 
@@ -75,8 +75,14 @@ npm test
 ## 参考实现与 Magpie 接口限制
 
 - 社区参考：[Magiczerowxy/magpie-chat](https://github.com/Magiczerowxy/magpie-chat)，使用 `magpie.page`、`magpie.page.service`、仅在 Magpie 的 sandboxed iframe 中导航自身。
-- Magpie 的 Providers 登录 hook **不能直接导航主窗口侧边栏标签**。因此本插件通过官方 `auth.methods` 的 **无 URL OAuth 等待流程**打开本机系统 TXT 文件选择框，不返回任何外部导入网页链接。与普通 API/keyless 登录不同，这个流程有较长的等待时间，首个账号成功后自动结束供应商登录；批量进度由左侧 Magpie 内嵌页显示。
+- Magpie 的 Providers 登录 hook **不能直接导航主窗口侧边栏标签**。因此本插件通过官方 `auth.methods[].prompts` 的 **Magpie 原生表单**先询问导入来源和账号归属确认，再通过**无 URL OAuth 等待流程**打开本机 TXT 文件选择框，不返回任何外部导入网页链接。与普通 API/keyless 登录不同，这个流程有较长的等待时间，首个账号成功后自动结束供应商登录；批量进度由左侧 Magpie 内嵌页显示。
 - 两个入口共用本地导入服务及账号池。Providers 首个成功账号即可完成登录，余下账号继续导入；Magpie 左侧页面显示任务进度。
 - 本实现遵守本机授权界面要求，但 Windows/macOS/Linux 系统对话框、Magpie 宿主与真实账号 OAuth 尚需实测。
 
 开发记录：[Issue #9](https://github.com/yang0/magpie-gptfree/issues/9)。
+
+## Provider 表单能力与当前边界
+
+Magpie 官方插件登录弹窗目前支持 `select`、`text`、`password` 类型的**逐步表单问题**，尚不支持第三方插件直接往 Providers 弹窗嵌入自定义 HTML、文件上传控件或进度表格。因此这版点击 GPTFree 名称会**先看到 Magpie 的原生表单**，不会再立即跳出文件选择器；提交确认之后再由系统选择文件。复杂的 TXT 表格预览、批量状态和账号池管理继续在 **Magpie 左侧 Plugins → GPTFree 账号导入** 的内嵌页面。若需要在 Providers **同一个弹窗**中完成文件拖入、预览、进度，需要 Magpie 上游新增插件自定义表单 API。
+
+跟踪：[Issue #11](https://github.com/yang0/magpie-gptfree/issues/11)。

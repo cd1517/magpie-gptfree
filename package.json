@@ -1,7 +1,7 @@
 {
   "name": "magpie-gptfree",
-  "version": "0.6.1",
-  "description": "Magpie embedded GUI bulk importer with independent DSH-style HTTP/TOTP authentication",
+  "version": "0.6.2",
+  "description": "GPT号池：Magpie 多账号批量导入与号池管理插件（支持独立 HTTP 登录与画图）",
   "type": "module",
   "main": "./index.mjs",
   "bin": {
@@ -36,11 +36,12 @@
   ],
   "license": "MIT",
   "magpie": {
+    "name": "GPT号池",
     "page": {
-      "title": "GPTFree Account Import",
+      "title": "GPT号池",
       "titles": {
-        "zh": "GPTFree 账号导入",
-        "zh-TW": "GPTFree 帳號匯入"
+        "zh": "GPT号池",
+        "zh-TW": "GPT號池"
       },
       "file": "gui/entry.html",
       "service": {
@@ -53,10 +54,10 @@
       {
         "id": "batch-import",
         "menu": "provider",
-        "title": "GPTFree Batch Import & Pool",
+        "title": "打开 GPT号池",
         "titles": {
-          "zh": "GPTFree 批量导入 / 号池管理",
-          "zh-TW": "GPTFree 批量匯入 / 號池管理"
+          "zh": "打开 GPT号池",
+          "zh-TW": "開啟 GPT號池"
         }
       }
     ]

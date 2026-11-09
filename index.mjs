@@ -1,7 +1,7 @@
 /**
- * Standalone Magpie GUI and token-pool providers.
+ * Standalone Magpie GUI and token-pool providers (GPT号池).
  * GUI entry runs in the plugin-host and serves its own sandboxed page.
- * Import is initiated via Plugins -> GPTFree 账号导入 or Providers -> GPTFree.
+ * Primary import & management live in the left-sidebar page (GPT号池).
  */
 import { CODEX_BASE, discoverPoolModels, poolFetch } from "./lib/codex-pool.mjs";
 import { GUI_PORT, startGuiServer } from "./lib/gui-service.mjs";
@@ -37,7 +37,7 @@ export const GPTFreeGuiPlugin = async (ctx, options) => {
   const raw = options?.port ?? GUI_PORT;
   const port = Number(raw);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
-    throw new Error("GPTFree GUI: invalid service port");
+    throw new Error("GPT号池 GUI: invalid service port");
   const connection = ensurePoolConnector(ctx) || createPoolConnector(ctx.client);
   await startGuiServer({ port, onPoolChange: () => connection.sync() });
   // Restore Magpie's per-account local-pool slots automatically after
@@ -64,7 +64,7 @@ export const GPTFreePoolPlugin = async (ctx = {}) => {
     config: async (cfg) => {
       cfg.provider ??= {};
       cfg.provider[POOL_PROVIDER] ??= {
-        name: "GPTFree Codex Pool (standalone)",
+        name: "GPT号池",
         npm: "@ai-sdk/openai",
         api: CODEX_BASE,
         models: {},

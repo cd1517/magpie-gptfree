@@ -363,9 +363,9 @@
       if (!draft?.hasDraft || typeof draft.text !== "string" || busy) return;
       tab("import");
       $("pasteAccounts").value = draft.text;
-      $("fileName").textContent = (draft.filename || "accounts.txt") + "（来自 Providers 预加载，可直接在下方编辑修正）";
+      $("fileName").textContent = (draft.filename || "accounts.txt") + "（已预加载，可直接在下方编辑修正）";
       updateLineCounter();
-      await previewText(draft.text, "来自 Providers 的 TXT 文件");
+      await previewText(draft.text, "预加载的 TXT 文件");
       $("pasteAccounts").focus();
     } catch {
       // Ignore transient errors when polling pending drafts.
@@ -428,7 +428,7 @@
             if (removed.connectionError)
               notice("账号已移除，但 Magpie 供应商状态同步失败", true);
             else if (removed.providerConnected === false)
-              notice("最后一个账号已移除，GPTFree 号池已自动断开");
+              notice("最后一个账号已移除，GPT号池已自动断开");
             else
               notice("账号已从本地号池移除，其余账号将继续轮询工作");
           }

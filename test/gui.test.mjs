@@ -37,14 +37,19 @@ async function harness(options = {}) {
 
 test("Magpie GUI manifest points to a real page, provider menu action and a loopback service", async () => {
   const pkg = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+  assert.equal(pkg.magpie.name, "GPT号池");
+  assert.equal(pkg.magpie.page.title, "GPT号池");
+  assert.equal(pkg.magpie.page.titles.zh, "GPT号池");
   assert.equal(pkg.magpie.page.file, "gui/entry.html");
   assert.equal(pkg.magpie.page.service.port, GUI_PORT);
   assert.equal(pkg.magpie.actions[0].id, "batch-import");
   assert.equal(pkg.magpie.actions[0].menu, "provider");
+  assert.equal(pkg.magpie.actions[0].titles.zh, "打开 GPT号池");
   assert(pkg.files.includes("gui"));
   assert.equal(typeof GPTFreeGuiPlugin, "function");
   const page = await readFile(new URL("../gui/entry.html", import.meta.url), "utf8");
   const entry = await readFile(new URL("../gui/entry.js", import.meta.url), "utf8");
+  assert(page.includes("GPT号池"));
   assert(page.includes("_magpie/bridge.js"));
   assert(entry.includes("magpie.service"));
   assert(entry.includes("location.replace"));
@@ -53,6 +58,7 @@ test("Magpie GUI manifest points to a real page, provider menu action and a loop
 test("GUI serves a real page with editable TXT-to-textarea flow and no secrets or storage", async () => {
   const h = await harness();
   try {
+    assert(h.html.includes("GPT号池"));
     assert(h.html.includes("批量导入账号"));
     assert(h.html.includes("导入并授权入池"));
     assert(h.html.includes("skipInvalid"));

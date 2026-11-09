@@ -102,5 +102,5 @@ test("Magpie provider is independent from the GUI file import flow", async () =>
   const config = { provider: {} };
   await plug.config(config);
   assert("gptfree-pool" in config.provider);
-  assert.equal(plug.auth.methods[0].type, "api");
+  assert.deepEqual(plug.auth.methods, []); // GUI import activates provider automatically
 });

@@ -11,7 +11,7 @@
 3. **点击「选择文件」或拖入 TXT 文件**。页面自动解析最多 100 条账号，展示掩码邮箱、三/四字段类型、JWT 过期状态、重复项和格式错误。明文密码、TOTP 和 Token 均不显示。
 4. 选择 **独立 Token 号池**（默认）或 **原生 Codex 导入**，勾选账号归属确认，点击 **开始批量导入**。
 5. 查看每条账号的状态、成功数、复用数、失败原因。支持 **停止导入**。使用「我的账号池」查看和移除独立池的账号。
-6. 在 Magpie 的 **Providers** 中登录/启用 `gptfree-pool`，便可让 Agent 选择它经真实 Codex 模型列表验证可用的模型。原生 Codex 模式的结果则在 Magpie 自带的 ChatGPT / Codex 账号列表中查看。
+6. **无需单独点击「登录」或「启用号池」**：选择 Token 号池模式时，任意账号成功授权入池，插件就会自动把 `gptfree-pool` 连接到 Magpie；成功后直接在 Agent 里选择实际验证可用的模型。原生 Codex 模式则会自动导入 Magpie 原生账号列表。
 
 > GUI 页面由 Magpie 插件服务运行在本机 `127.0.0.1:37986`，不要求另开终端导入。首次使用需要插件主机能启动服务，并且设备已装 Chrome / Edge 供正常的交互式 OAuth 登录。尚未在真实 Windows Magpie + 真实账号上完成端到端验证，请先用少量自有测试账号。
 
@@ -38,7 +38,7 @@ third@example.com----PASSWORD----GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ----eyJhbGciOiJ
 
 ## 两种导入模式
 
-**独立 Token 号池（默认）**：已有 access_token 会被 Codex 上游实际验证；成功才算可复用，验证失败或过期则进入正常交互式 OAuth 登录。账号池保存在当前运行 Magpie 机器用户的 `~/.magpie-gptfree/` 下，使用 AES-256-GCM 加密。密钥存放在同用户权限限定的 `master.key` 文件，**不是系统密钥链或硬件安全模块**。上游 Token 失效后会尝试重新 OAuth，可能仍需人工验证。
+**独立 Token 号池（默认）**：已有 access_token 会被 Codex 上游实际验证；成功才算可复用，验证失败或过期则进入正常交互式 OAuth 登录。成功入池后自动注册 Magpie Provider，重启插件时有本地记录则自动恢复关联；移除最后一个号池账号会自动取消注册。账号池保存在当前运行 Magpie 机器用户的 `~/.magpie-gptfree/` 下，使用 AES-256-GCM 加密。密钥存放在同用户权限限定的 `master.key` 文件，**不是系统密钥链或硬件安全模块**。上游 Token 失效后会尝试重新 OAuth，可能仍需人工验证。
 
 **Magpie 原生 Codex 导入**：每个账号必须通过 OAuth 得到 `access_token`、`id_token` 和 `refresh_token`，再经 Magpie 自带的导入接口入池。单独 access_token 不能被伪装成可续期的原生账号，故不会跳过 OAuth。
 
@@ -63,6 +63,8 @@ npm test
 测试覆盖 GUI 注册、文件上传/三格式识别、脱敏预览、随机会话校验、来源限制、开始/进度/取消任务、账号池查看/移除、原有 OAuth/TOTP/Token 与加密存储。测试均使用模拟凭证，**不接触真实 ChatGPT 账号**。
 
 高级 CLI 仍保留在 `bin/import.mjs`，但不再是常规导入入口。
+
+**登录是导入流程的一部分**：只有在官方提示额外安全验证时需要操作登录窗口。不会再出现单独的 GPTFree 号池「登录」按钮。
 
 开发记录：[GUI Issue #3](https://github.com/yang0/magpie-gptfree/issues/3) · [原账号池 Issue #1](https://github.com/yang0/magpie-gptfree/issues/1)。
 

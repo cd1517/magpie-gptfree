@@ -180,8 +180,16 @@
       hidden("cancelButton", true);
       hidden("againButton", false);
       await loadPool();
-      if (info.state === "completed") notice("批量导入已完成，可在账号池查看结果");
-      else notice(info.message || "批量导入已停止，未完成的账号可稍后重试", true);
+      if (info.state === "completed") {
+        if (info.providerConnected === true)
+          notice("账号已完成导入及自动授权，GPTFree 号池已连接 Magpie，可以直接选择可用模型");
+        else if (info.providerConnected === false)
+          notice(info.message || "账号已入池，但连接 Magpie 号池失败；请检查插件状态", true);
+        else if (info.mode === "native")
+          notice("账号导入完成；成功授权的账号已直接写入 Magpie 原生 Codex 账号池");
+        else
+          notice("账号导入完成，可在「我的账号池」查看；当前批次没有可用账号时不会连接供应商");
+      } else notice(info.message || "批量导入已停止，未完成的账号可稍后重试", true);
     }
   }
   function stopPolling() {
@@ -247,7 +255,16 @@
             return;
           }
           remove.disabled = true;
-          try { await api("remove", { id: account.id }); await loadPool(); notice("账号已从本地 Token 号池移除"); }
+          try {
+            const removed = await api("remove", { id: account.id });
+            await loadPool();
+            if (removed.connectionError)
+              notice("账号已移除，但 Magpie 供应商状态同步失败", true);
+            else if (removed.providerConnected === false)
+              notice("最后一个账号已移除，GPTFree 号池已自动断开");
+            else
+              notice("账号已从本地号池移除，其余账号可继续使用");
+          }
           catch (err) { notice(err.message, true); remove.disabled = false; }
         });
         controls.append(remove);

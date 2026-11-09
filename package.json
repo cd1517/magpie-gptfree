@@ -1,7 +1,7 @@
 {
   "name": "magpie-gptfree",
-  "version": "0.2.0",
-  "description": "Magpie GUI plugin for safe batch ChatGPT 2FA and token import",
+  "version": "0.2.1",
+  "description": "Magpie GUI batch ChatGPT login and token pool, with automatic provider connection",
   "type": "module",
   "main": "./index.mjs",
   "bin": {
@@ -17,7 +17,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.mjs",
-    "check": "node --check index.mjs && node --check bin/import.mjs && node --check lib/oauth.mjs && node --check lib/login.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs && node --check lib/gui-service.mjs && node --check gui/app.js && node --check gui/entry.js"
+    "check": "node --check index.mjs && node --check bin/import.mjs && node --check lib/oauth.mjs && node --check lib/login.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs && node --check lib/gui-service.mjs && node --check gui/app.js && node --check gui/entry.js && node --check lib/pool-connection.mjs"
   },
   "engines": {
     "node": ">=20"

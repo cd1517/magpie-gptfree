@@ -3,16 +3,27 @@
  * GUI entry runs in the plugin-host and serves its own sandboxed page.
  * Import is initiated with Magpie Plugins -> GPTFree Account Import.
  */
-import { listPool } from "./lib/pool-vault.mjs";
 import { CODEX_BASE, discoverPoolModels, poolFetch } from "./lib/codex-pool.mjs";
 import { GUI_PORT, startGuiServer } from "./lib/gui-service.mjs";
+import { createPoolConnector, POOL_MARKER } from "./lib/pool-connection.mjs";
 
-export const GPTFreeGuiPlugin = async (_ctx, options) => {
+export const GPTFreeGuiPlugin = async (ctx, options) => {
   const raw = options?.port ?? GUI_PORT;
   const port = Number(raw);
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535)
     throw new Error("GPTFree GUI: invalid service port");
-  await startGuiServer({ port });
+  const connection = createPoolConnector(ctx.client);
+  await startGuiServer({ port, onPoolChange: () => connection.sync() });
+  // Restore Magpie's non-secret local-pool connection automatically after
+  // restarting. A corrupt vault must not make the GUI inaccessible.
+  try {
+    await connection.sync();
+  } catch {
+    await ctx.client.app.log({
+      body: { service: "gptfree", level: "warn",
+        message: "Could not restore local account-pool state; inspect GUI pool storage" },
+    }).catch(() => {});
+  }
   return {};
 };
 
@@ -35,27 +46,15 @@ export const GPTFreePoolPlugin = async () => ({
   auth: {
     provider: "gptfree-pool",
     maxConcurrency: 2,
-    methods: [{
-      type: "api", keyless: true,
-      label: "启用本地 GPTFree Token 号池",
-      async authorize() {
-        const rows = await listPool();
-        if (!rows.length) return {
-          type: "failed",
-          error: "本地号池为空：请在 Plugins → GPTFree 账号导入 中选择 TXT 文件并导入",
-        };
-        return {
-          type: "success", key: "local-pool-enabled",
-          metadata: { accountId: "GPTFree local pool" },
-        };
-      },
-    }],
+    // No interactive "log in / enable" step: the GUI import registers
+    // this provider by client.auth.set when it successfully writes the pool.
+    methods: [],
     async loader(getAuth) {
       const auth = await getAuth();
       if (auth?.type !== "api") return {};
       return {
         baseURL: CODEX_BASE,
-        apiKey: "local-pool-enabled",
+        apiKey: POOL_MARKER,
         fetch: (input, init) => poolFetch(input, init),
       };
     },

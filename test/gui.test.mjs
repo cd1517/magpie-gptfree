@@ -205,3 +205,50 @@ test("GUI is restricted to loopback, never LAN-exposed", async () => {
   const bad = createGuiService({ port: 0, bind: "0.0.0.0" });
   await assert.rejects(bad.listen(), /127.0.0.1/);
 });
+
+test("GUI auto-connects Magpie after successful pool import, no separate login", async () => {
+  let linked = 0;
+  const h = await harness({
+    onPoolChange: async () => { linked++; return { connected: true }; },
+    batch: async () => ({ total: 1, added: 1, reused: 0, failed: [] }),
+  });
+  try {
+    await h.api("preview", { text: `owner@example.com----pass----${seed}` });
+    assert.equal((await h.api("start", { mode: "pool", consent: true })).status, 202);
+    let state;
+    for (let i = 0; i < 40; i++) {
+      state = (await h.api("status")).json;
+      if (state.state === "completed") break;
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    assert.equal(state.result.added, 1);
+    assert.equal(state.providerConnected, true);
+    assert.equal(linked, 1);
+  } finally { await h.close(); }
+});
+
+test("native and failed pool imports do not auto-connect independent pool", async () => {
+  for (const mode of ["native", "pool"]) {
+    let linked = 0;
+    const h = await harness({
+      onPoolChange: async () => { linked++; return { connected: true }; },
+      batch: async () => ({
+        total: 1, added: mode === "native" ? 1 : 0,
+        reused: 0, failed: mode === "pool" ? [{}] : [],
+      }),
+    });
+    try {
+      await h.api("preview", { text: `owner@example.com----pass----${seed}` });
+      await h.api("start", { mode, consent: true });
+      for (let i = 0; i < 40; i++) {
+        const state = (await h.api("status")).json;
+        if (state.state === "completed") {
+          assert.equal(state.providerConnected, null);
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 15));
+      }
+      assert.equal(linked, 0);
+    } finally { await h.close(); }
+  }
+});

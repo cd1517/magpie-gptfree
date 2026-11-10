@@ -39,15 +39,18 @@
 
 ### 第 1 步：在 Magpie 里安装插件
 
-打开 Magpie，点顶部 **「插件」** → 切到 **「发现」** → 在最底部的输入框里填仓库地址：
+打开 Magpie，点顶部 **「插件」** → 切到 **「发现」** → 在最底部的输入框里填入仓库地址：
 
 ```
-github:yang0/magpie-gptfree
+https://github.com/yang0/magpie-gptfree
 ```
 
 点右边的 **「安装」**，稍等几秒搞定。
 
 ![在 Magpie 插件页填入 GitHub 仓库地址一键安装](docs/images/install-plugin.jpg)
+
+> [!TIP]
+> 简写 `github:yang0/magpie-gptfree` 同样可以被识别，填哪一个都行。
 
 ### 第 2 步：导入账号
 

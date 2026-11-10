@@ -12,8 +12,10 @@ import {
   buildImageModelCatalog,
   checkWebImageQuota,
   executeWebImageGeneration,
+  isImageModelId,
   parseImageRequest,
   runWebImageWorker,
+  supportsGifOutput,
 } from "../lib/chatgpt-web-image.mjs";
 import {
   createInMemoryStatsStore, isAccountRateLimited, readPoolStats, recordQuotaCheck,
@@ -54,6 +56,44 @@ test("image model catalog exposes Magpie host.js @ai-sdk/openai-compatible schem
   assert.equal(img.capabilities.output.text, false);
   assert.equal(img.capabilities.output.image, true);
   assert.equal(img.attachment, true);
+
+  // The 2.6 family must be exposed too, and only 2.6 supports animated GIF.
+  const flags = ["gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"];
+  for (const id of flags) {
+    const model = cat[id];
+    assert.equal(model.id, id);
+    assert.equal(model.api.npm, "@ai-sdk/openai-compatible");
+    assert.equal(model.capabilities.output.image, true);
+    assert.equal(model.capabilities.animated, true);
+  }
+  assert.equal(cat["gpt-image-2"].capabilities.animated, undefined);
+  assert.equal(isImageModelId("plus-gpt-image-2.6"), true);
+
+  // GIF output is accepted for 2.6 and rejected for the older model.
+  const gif2 = await parseImageRequest("/backend-api/codex/images/generations", JSON.stringify({
+    model: "gpt-image-2.6",
+    prompt: "spinning coin",
+    output_format: "gif",
+    frame_count: 12,
+    frame_duration_ms: 100,
+  }));
+  assert.equal(gif2.model, "gpt-image-2.6");
+  assert.equal(gif2.output_format, "gif");
+  assert.equal(gif2.frame_count, 12);
+  assert.equal(gif2.frame_duration_ms, 100);
+  await assert.rejects(
+    parseImageRequest("/backend-api/codex/images/generations", JSON.stringify({
+      model: "gpt-image-2",
+      prompt: "spinning coin",
+      output_format: "gif",
+    })),
+    (err) => err.status === 400 && /2\.6/.test(err.message),
+  );
+  await assert.rejects(
+    parseImageRequest("/backend-api/codex/images/generations",
+      JSON.stringify({ model: "gpt-image-9", prompt: "x" })),
+    (err) => err.status === 400 && err.code === "model_not_found",
+  );
 
   // Verify integrated discoverPoolModels keeps Codex text models on @ai-sdk/openai
   const models = await discoverPoolModels({

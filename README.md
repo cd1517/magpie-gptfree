@@ -6,7 +6,7 @@
 
 [![Magpie](https://img.shields.io/badge/Magpie-Plugin-3177d9)](https://github.com/yetone/magpie)
 [![license](https://img.shields.io/badge/license-MIT-16845c)](./package.json)
-[![version](https://img.shields.io/badge/version-0.6.3-a36207)](./package.json)
+[![version](https://img.shields.io/badge/version-0.6.4-a36207)](./package.json)
 
 ---
 
@@ -16,7 +16,7 @@
 
 - **批量导入**：一行一个账号，粘进文本框就行；格式不对可以直接改，不用重新上传文件。
 - **多账号真轮询**：每个账号单独出现在 Magpie 里，可单独启用、可设为首选；某个号挂了，自动切下一个。
-- **生图真能用**：不只聊天，文生图、改图都能跑，普号的图片额度一样用得上。
+- **生图真能用**：不只聊天，文生图、改图都能跑，普号的图片额度一样用得上。图片模型覆盖 **GPT Image 2** 与 **GPT Image 2.6 全系列**（`gpt-image-2` / `gpt-image-2.6` / `gpt-image-2.6-flare` / `gpt-image-2.6-sunburst`），2.6 系列还支持生成 GIF 动图。
 - **额度看得见**：「我的账号池」每个号旁边直接显示**真实剩余生图额度**；「额度统计」页给你 当前账号 / 可用 / 限流 / 剩余额度 / 成功 / 失败 六个数字。
 - **数据不出本机**：凭证加密保存在你自己的电脑上，界面只显示打码邮箱。
 
@@ -121,7 +121,7 @@ https://github.com/yang0/magpie-gptfree
 不会。这是完全独立的临时号池，不碰你原有的配置。
 
 **Q：为什么没有图片模型？**
-号池里至少要有 1 个可用账号，图片模型才会出现在模型列表里。
+号池里至少要有 1 个可用账号，图片模型才会出现在模型列表里。可用的图片模型有 `gpt-image-2`、`gpt-image-2.6`、`gpt-image-2.6-flare`、`gpt-image-2.6-sunburst`，其中 2.6 系列支持 GIF 动图输出。
 
 **Q：账号会泄露吗？**
 界面上只显示打码邮箱和槽位编号；密码、2FA、Token 只加密存在本机，不写进配置、不进网页、不进日志。

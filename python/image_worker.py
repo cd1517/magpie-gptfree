@@ -53,7 +53,43 @@ MAX_STDIN_BYTES = 48 * 1024 * 1024
 MAX_INPUT_IMAGES = 10
 MAX_INPUT_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_PNG_DECODED_BYTES = 100 * 1024 * 1024
-SUPPORTED_OUTPUT_FORMATS = {"", "auto", "png", "webp", "jpeg", "jpg"}
+SUPPORTED_OUTPUT_FORMATS = {"", "auto", "png", "webp", "jpeg", "jpg", "gif"}
+
+# Models exposed to clients (mirrors yang0/chatgpt2api-dsh).
+IMAGE_MODELS = (
+    "gpt-image-2",
+    "gpt-image-2.6",
+    "gpt-image-2.6-flare",
+    "gpt-image-2.6-sunburst",
+)
+GIF_CAPABLE_MODELS = {"gpt-image-2.6", "gpt-image-2.6-flare", "gpt-image-2.6-sunburst"}
+IMAGE_MODEL_PLAN_TYPES = ("plus", "team", "pro")
+DEFAULT_UPSTREAM_MODEL = "gpt-5-5"
+
+
+def normalize_image_model(model: Any) -> str | None:
+    """Map a client model name (possibly plan-prefixed) to a supported base model."""
+    raw = str(model or "").strip().lower()
+    if not raw:
+        return "gpt-image-2"
+    if raw in IMAGE_MODELS:
+        return raw
+    for plan_type in IMAGE_MODEL_PLAN_TYPES:
+        prefix = f"{plan_type}-"
+        if raw.startswith(prefix) and raw[len(prefix):] in IMAGE_MODELS:
+            return raw[len(prefix):]
+    return None
+
+
+def image_model_settings(model: Any) -> tuple[str, str]:
+    """Return (upstream_model, thinking_effort) for a client-facing image model."""
+    base_model = normalize_image_model(model)
+    if base_model == "gpt-image-2":
+        return DEFAULT_UPSTREAM_MODEL, ""
+    if base_model in GIF_CAPABLE_MODELS:
+        # The 2.6 family lets the web client pick the model itself.
+        return "auto", ""
+    return "auto", ""
 
 FILE_SERVICE_ID_RE = re.compile(r"file-service://([A-Za-z0-9_-]+)")
 REAL_IMAGE_FILE_ID_RE = re.compile(r"\bfile_00000000[a-f0-9]{24}\b")
@@ -591,6 +627,8 @@ def build_image_prompt(
     quality: str = "auto",
     output_format: str | None = None,
     background: str | None = None,
+    frame_count: int | None = None,
+    frame_duration_ms: int | None = None,
 ) -> str:
     hints: list[str] = []
     size_clean = str(size or "").strip()
@@ -602,7 +640,13 @@ def build_image_prompt(
     fmt_clean = str(output_format or "").strip().lower()
     if fmt_clean == "jpg":
         fmt_clean = "jpeg"
-    if fmt_clean and fmt_clean != "auto":
+    if fmt_clean == "gif":
+        hints.append("生成格式为 gif 动图；输出真正的多帧动画，不要输出分镜拼图或静态帧。")
+        if frame_count is not None:
+            hints.append(f"帧数约为 {int(frame_count)} 帧。")
+        if frame_duration_ms is not None:
+            hints.append(f"每帧时长约为 {int(frame_duration_ms)} 毫秒。")
+    elif fmt_clean and fmt_clean != "auto":
         hints.append(f"输出图片格式为 {fmt_clean}。")
     bg_clean = str(background or "").strip().lower()
     if bg_clean and bg_clean != "auto":
@@ -1747,23 +1791,43 @@ class OpenAIWebImageClient:
         self,
         *,
         prompt: str,
+        model: str | None = None,
         size: str | None = None,
         quality: str = "auto",
         output_format: str | None = None,
         background: str | None = None,
+        frame_count: int | None = None,
+        frame_duration_ms: int | None = None,
         images: list[tuple[bytes, str, str]] | None = None,
         masks: list[tuple[bytes, str, str]] | None = None,
     ) -> Dict[str, Any]:
         clean_prompt = str(prompt or "").strip()
         if not clean_prompt:
             raise ImageWorkerError("Prompt is required", http_status=400, error_code="invalid_request")
+        base_model = normalize_image_model(model)
+        if base_model is None:
+            raise ImageWorkerError(
+                f"Unsupported image model: {model}",
+                http_status=400,
+                error_code="model_not_found",
+            )
         fmt_clean = str(output_format or "").strip().lower()
+        if fmt_clean == "jpg":
+            fmt_clean = "jpeg"
         if fmt_clean not in SUPPORTED_OUTPUT_FORMATS:
             raise ImageWorkerError(
                 f"Unsupported output_format: {output_format}",
                 http_status=400,
                 error_code="invalid_request",
             )
+        if fmt_clean == "gif" and base_model not in GIF_CAPABLE_MODELS:
+            raise ImageWorkerError(
+                "GIF 动图需要 gpt-image-2.6 系列模型",
+                http_status=400,
+                error_code="invalid_request",
+            )
+        self.upstream_model, self.thinking_effort = image_model_settings(base_model)
+        output_format = fmt_clean or None
 
         input_images = list(images or [])
         input_masks = list(masks or [])
@@ -1784,6 +1848,8 @@ class OpenAIWebImageClient:
                 quality=quality,
                 output_format=output_format,
                 background=background,
+                frame_count=frame_count,
+                frame_duration_ms=frame_duration_ms,
             )
             started_at = time.time()
             self._bootstrap()
@@ -1944,13 +2010,41 @@ def handle_payload(data: Any, *, session: Any = None) -> Dict[str, Any]:
         clean_prompt = str(data.get("prompt") or "").strip()
         if not clean_prompt:
             raise ImageWorkerError("Prompt is required", http_status=400, error_code="invalid_request")
+        requested_model = str(data.get("model") or data.get("model_id") or "").strip()
+        base_model = normalize_image_model(requested_model)
+        if base_model is None:
+            raise ImageWorkerError(
+                f"Unsupported image model: {requested_model}",
+                http_status=400,
+                error_code="model_not_found",
+            )
         fmt_clean = str(data.get("output_format") or "").strip().lower()
+        if fmt_clean == "jpg":
+            fmt_clean = "jpeg"
         if fmt_clean not in SUPPORTED_OUTPUT_FORMATS:
             raise ImageWorkerError(
                 f"Unsupported output_format: {data.get('output_format')}",
                 http_status=400,
                 error_code="invalid_request",
             )
+        if fmt_clean == "gif" and base_model not in GIF_CAPABLE_MODELS:
+            raise ImageWorkerError(
+                "GIF 动图需要 gpt-image-2.6 系列模型",
+                http_status=400,
+                error_code="invalid_request",
+            )
+        frame_count_raw = data.get("frame_count")
+        frame_duration_raw = data.get("frame_duration_ms")
+        try:
+            frame_count = int(frame_count_raw) if frame_count_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            frame_count = None
+        try:
+            frame_duration_ms = (
+                int(frame_duration_raw) if frame_duration_raw not in (None, "") else None
+            )
+        except (TypeError, ValueError):
+            frame_duration_ms = None
         images = _decode_stdin_images(data.get("images"), field_name="images")
         masks = _decode_stdin_images(data.get("masks"), field_name="masks")
         if masks and not images:
@@ -1964,7 +2058,7 @@ def handle_payload(data: Any, *, session: Any = None) -> Dict[str, Any]:
         with OpenAIWebImageClient(
             access_token,
             proxy=str(data.get("proxy") or "").strip(),
-            upstream_model=str(data.get("upstream_model") or "gpt-5-5").strip(),
+            upstream_model=str(data.get("upstream_model") or DEFAULT_UPSTREAM_MODEL).strip(),
             thinking_effort=str(data.get("thinking_effort") or "").strip(),
             session=session,
             poll_timeout_secs=poll_timeout,
@@ -1975,10 +2069,13 @@ def handle_payload(data: Any, *, session: Any = None) -> Dict[str, Any]:
         ) as client:
             return client.generate_image(
                 prompt=clean_prompt,
+                model=base_model,
                 size=str(data.get("size") or "") or None,
                 quality=str(data.get("quality") or "auto"),
                 output_format=fmt_clean or None,
                 background=str(data.get("background") or "") or None,
+                frame_count=frame_count,
+                frame_duration_ms=frame_duration_ms,
                 images=images,
                 masks=masks,
             )

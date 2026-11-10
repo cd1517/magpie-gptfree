@@ -182,6 +182,37 @@ class ImageWorkerUnitTests(unittest.TestCase):
         _, _, _, rgba2 = image_worker._decode_png_rgba(out2)
         self.assertEqual(list(rgba2[3::4]), [42, 42, 42, 42])
 
+    def test_image_model_2_6_support_gif_and_rejects_unknown_models(self):
+        self.assertEqual(image_worker.normalize_image_model("gpt-image-2.6"), "gpt-image-2.6")
+        self.assertEqual(image_worker.normalize_image_model("plus-gpt-image-2.6-flare"), "gpt-image-2.6-flare")
+        self.assertEqual(image_worker.normalize_image_model(""), "gpt-image-2")
+        self.assertIsNone(image_worker.normalize_image_model("gpt-image-9"))
+        self.assertEqual(image_worker.image_model_settings("gpt-image-2")[0], image_worker.DEFAULT_UPSTREAM_MODEL)
+        self.assertEqual(image_worker.image_model_settings("gpt-image-2.6-sunburst"), ("auto", ""))
+        self.assertIn("gif 动图", image_worker.build_image_prompt(
+            "spin", output_format="gif", frame_count=8, frame_duration_ms=120,
+        ))
+
+        # GIF is only valid for the 2.6 family and must be rejected for gpt-image-2.
+        bad_gif = image_worker.handle_payload({
+            "action": "generate_image",
+            "access_token": "tok",
+            "model": "gpt-image-2",
+            "prompt": "spin",
+            "output_format": "gif",
+        })
+        self.assertFalse(bad_gif["ok"])
+        self.assertEqual(bad_gif["http_status"], 400)
+
+        bad_model = image_worker.handle_payload({
+            "action": "generate_image",
+            "access_token": "tok",
+            "model": "gpt-image-9",
+            "prompt": "x",
+        })
+        self.assertFalse(bad_model["ok"])
+        self.assertEqual(bad_model["error_code"], "model_not_found")
+
     def test_end_to_end_generation_sse_ignores_user_upload_and_cleans_up(self):
         output_png = _make_rgba_png(4, 4, [(0, 128, 255, 255)] * 16)
         input_png = _make_rgba_png(2, 2, [(255, 255, 255, 255)] * 4)

@@ -956,6 +956,30 @@ class OpenAIWebImageClient:
         return self._headers(path, headers)
 
     @staticmethod
+    def _extract_retry_after_from_body(body: Any) -> int | None:
+        if not isinstance(body, dict):
+            return None
+        candidates = [body.get("retry_after"), body.get("resets_in_seconds"), body.get("clears_in")]
+        for nested_key in ("detail", "error"):
+            nested = body.get(nested_key)
+            if isinstance(nested, dict):
+                candidates.extend([
+                    nested.get("retry_after"),
+                    nested.get("resets_in_seconds"),
+                    nested.get("clears_in"),
+                ])
+        for candidate in candidates:
+            if candidate is None or isinstance(candidate, bool):
+                continue
+            try:
+                sec = int(float(candidate))
+            except (TypeError, ValueError):
+                continue
+            if sec > 0:
+                return sec
+        return None
+
+    @staticmethod
     def _ensure_ok(response: Any, context: str) -> None:
         status = int(getattr(response, "status_code", 0) or 0)
         if 200 <= status < 300:
@@ -971,9 +995,88 @@ class OpenAIWebImageClient:
             ra_raw = headers.get("Retry-After") if hasattr(headers, "get") else None
             if ra_raw is not None and str(ra_raw).strip().isdigit():
                 retry_after = int(str(ra_raw).strip())
+        if retry_after is None:
+            retry_after = OpenAIWebImageClient._extract_retry_after_from_body(body)
         if _is_token_invalid_text(json.dumps(body, ensure_ascii=False) if isinstance(body, (dict, list)) else str(body)):
             raise UpstreamHTTPError(context, 401, body, retry_after=retry_after)
         raise UpstreamHTTPError(context, status, body, retry_after=retry_after)
+
+    @staticmethod
+    def extract_image_quota(limits_progress: Any) -> tuple[int, str | None, bool]:
+        if isinstance(limits_progress, list):
+            for item in limits_progress:
+                if isinstance(item, dict) and item.get("feature_name") == "image_gen":
+                    raw_remaining = item.get("remaining")
+                    try:
+                        quota = max(0, int(raw_remaining if raw_remaining is not None else 0))
+                    except (TypeError, ValueError):
+                        quota = 0
+                    restore_at = str(item.get("reset_after") or "").strip() or None
+                    return quota, restore_at, True
+        return 0, None, False
+
+    def check_image_quota(self, *, timezone_offset_min: int = -480) -> Dict[str, Any]:
+        init_path = "/backend-api/conversation/init"
+        init_resp = self.session.post(
+            self.base_url + init_path,
+            headers=self._headers(init_path, {"Content-Type": "application/json", "Accept": "application/json"}),
+            json={
+                "gizmo_id": None,
+                "requested_default_model": None,
+                "conversation_id": None,
+                "timezone_offset_min": int(timezone_offset_min),
+            },
+            timeout=20,
+        )
+        self._ensure_ok(init_resp, "conversation_init")
+        try:
+            init_payload = init_resp.json()
+        except Exception as exc:
+            raise ImageWorkerError(
+                "Invalid conversation init response",
+                http_status=502,
+                error_code="upstream_error",
+            ) from exc
+        if not isinstance(init_payload, dict):
+            raise ImageWorkerError(
+                "Invalid conversation init response",
+                http_status=502,
+                error_code="upstream_error",
+            )
+
+        quota, restore_at, has_image_limit = self.extract_image_quota(init_payload.get("limits_progress"))
+        default_model_slug = str(init_payload.get("default_model_slug") or "").strip() or None
+
+        plan_type = ""
+        try:
+            chk_path = "/backend-api/accounts/check/v4-2023-04-27"
+            chk_resp = self.session.get(
+                f"{self.base_url}{chk_path}?timezone_offset_min={int(timezone_offset_min)}",
+                headers=self._headers(chk_path, {"Accept": "application/json"}),
+                timeout=12,
+            )
+            if int(getattr(chk_resp, "status_code", 0) or 0) == 401:
+                self._ensure_ok(chk_resp, "accounts_check")
+            if int(getattr(chk_resp, "status_code", 0) or 0) == 200:
+                chk_data = chk_resp.json()
+                if isinstance(chk_data, dict):
+                    default_acc = ((chk_data.get("accounts") or {}).get("default") or {}).get("account") or {}
+                    if isinstance(default_acc, dict):
+                        plan_type = str(default_acc.get("plan_type") or "").strip()
+        except UpstreamHTTPError:
+            raise
+        except Exception:
+            pass
+
+        return {
+            "ok": True,
+            "quota": quota,
+            "restore_at": restore_at,
+            "has_image_limit": has_image_limit,
+            "plan_type": plan_type or None,
+            "default_model_slug": default_model_slug,
+            "checked_at": int(time.time()),
+        }
 
     def _bootstrap(self) -> None:
         response = self.session.get(
@@ -1816,7 +1919,8 @@ def _decode_stdin_images(entries: Any, *, field_name: str = "images") -> list[tu
 
 
 def handle_payload(data: Any, *, session: Any = None) -> Dict[str, Any]:
-    if not isinstance(data, dict) or data.get("action") != "generate_image":
+    action = data.get("action") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or action not in ("generate_image", "check_image_quota"):
         return {"ok": False, "http_status": 400, "error_code": "invalid_request", "error": "Invalid worker action"}
 
     access_token = str(data.get("access_token") or "").strip()
@@ -1824,6 +1928,19 @@ def handle_payload(data: Any, *, session: Any = None) -> Dict[str, Any]:
         return {"ok": False, "http_status": 401, "error_code": "unauthorized", "error": "Missing access_token"}
 
     try:
+        if action == "check_image_quota":
+            tz_raw = data.get("timezone_offset_min")
+            try:
+                tz_offset = int(tz_raw) if tz_raw is not None else -480
+            except (TypeError, ValueError):
+                tz_offset = -480
+            with OpenAIWebImageClient(
+                access_token,
+                proxy=str(data.get("proxy") or "").strip(),
+                session=session,
+            ) as client:
+                return client.check_image_quota(timezone_offset_min=tz_offset)
+
         clean_prompt = str(data.get("prompt") or "").strip()
         if not clean_prompt:
             raise ImageWorkerError("Prompt is required", http_status=400, error_code="invalid_request")

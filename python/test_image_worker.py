@@ -407,6 +407,66 @@ class ImageWorkerUnitTests(unittest.TestCase):
             imgs = client._download_image_bytes(urls)
             self.assertEqual(imgs, [output_png])
 
+    def test_check_image_quota_parses_limits_progress_plan_and_rate_limits(self):
+        # 1. Active account with image_gen remaining quota and reset_after
+        def quota_handler(method, url, kwargs):
+            if method == "POST" and url == "https://chatgpt.com/backend-api/conversation/init":
+                return FakeResponse(json_data={
+                    "default_model_slug": "auto",
+                    "limits_progress": [
+                        {"feature_name": "other_tool", "remaining": 5},
+                        {"feature_name": "image_gen", "remaining": 18, "reset_after": "2026-11-10T12:00:00+00:00"},
+                    ],
+                })
+            if method == "GET" and url.startswith("https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"):
+                return FakeResponse(json_data={
+                    "accounts": {"default": {"account": {"plan_type": "free"}}},
+                })
+            raise AssertionError(f"Unexpected call: {method} {url}")
+
+        res = image_worker.handle_payload(
+            {"action": "check_image_quota", "access_token": "tok-q1"},
+            session=FakeSession(quota_handler),
+        )
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["quota"], 18)
+        self.assertEqual(res["restore_at"], "2026-11-10T12:00:00+00:00")
+        self.assertTrue(res["has_image_limit"])
+        self.assertEqual(res["plan_type"], "free")
+        self.assertEqual(res["default_model_slug"], "auto")
+
+        # 2. Missing image_gen entry defaults to quota 0 and keeps working even if accounts/check fails
+        def empty_limits_handler(method, url, kwargs):
+            if method == "POST" and url.endswith("/conversation/init"):
+                return FakeResponse(json_data={"limits_progress": []})
+            return FakeResponse(status_code=500, text="temporary check error")
+
+        res_empty = image_worker.handle_payload(
+            {"action": "check_image_quota", "access_token": "tok-q2"},
+            session=FakeSession(empty_limits_handler),
+        )
+        self.assertTrue(res_empty["ok"])
+        self.assertEqual(res_empty["quota"], 0)
+        self.assertFalse(res_empty["has_image_limit"])
+        self.assertIsNone(res_empty["restore_at"])
+
+        # 3. HTTP 401 and JSON 429 retry_after extraction
+        res_unauth = image_worker.handle_payload(
+            {"action": "check_image_quota", "access_token": "tok-bad"},
+            session=FakeSession(lambda m, u, k: FakeResponse(status_code=401, json_data={"detail": "token_invalidated"})),
+        )
+        self.assertFalse(res_unauth["ok"])
+        self.assertEqual(res_unauth["http_status"], 401)
+        self.assertEqual(res_unauth["error_code"], "unauthorized")
+
+        res_429 = image_worker.handle_payload(
+            {"action": "check_image_quota", "access_token": "tok-429"},
+            session=FakeSession(lambda m, u, k: FakeResponse(status_code=429, json_data={"detail": {"clears_in": 95}})),
+        )
+        self.assertFalse(res_429["ok"])
+        self.assertEqual(res_429["http_status"], 429)
+        self.assertEqual(res_429["retry_after"], 95)
+
 
 if __name__ == "__main__":
     unittest.main()

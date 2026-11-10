@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createGuiService, GUI_PORT } from "../lib/gui-service.mjs";
+import { createInMemoryStatsStore, recordImageCall, recordQuotaCheck } from "../lib/pool-stats.mjs";
 import { accountSlotTag, formatAccountSlotLabel } from "../lib/pool-connection.mjs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -395,4 +396,96 @@ test("GUI POST /api/sync and multi-account start progressively synchronize Provi
     assert.equal(state.providerCount, 2);
     assert.equal(syncCalls >= 2, true);
   } finally { await h.close(); }
+});
+
+test("GUI exposes 额度统计 tab, per-account image quota pills, GET /api/stats, quotaOnly refresh, and stats cleanup on remove", async () => {
+  const alice = "alice@example.com";
+  const bob = "bob@example.com";
+  const records = [
+    { email: alice, accessToken: future(), totp: seed, password: "p1" },
+    { email: bob, accessToken: future(), totp: seed, password: "p2" },
+  ];
+  const store = createInMemoryStatsStore();
+  await recordQuotaCheck({ email: alice, quota: 7, hasImageLimit: true, planType: "free" }, { statsStore: store });
+  await recordImageCall({ email: alice, success: true, count: 1 }, { statsStore: store });
+  await recordQuotaCheck({ email: bob, quota: 0, hasImageLimit: true, planType: "free", restoreAt: new Date(Date.now() + 600_000).toISOString() }, { statsStore: store });
+  await recordImageCall({ email: bob, success: false, rateLimited: true, retryAfter: 600 }, { statsStore: store });
+
+  let refreshCount = 0;
+  const h = await harness({
+    poolRead: async () => records,
+    poolRemove: async (email) => {
+      const idx = records.findIndex((r) => r.email === email);
+      if (idx >= 0) records.splice(idx, 1);
+    },
+    statsStore: store,
+    runWorker: async (payload) => {
+      assert.equal(payload.action, "check_image_quota");
+      refreshCount++;
+      return {
+        ok: true,
+        quota: refreshCount === 1 ? 12 : 4,
+        restore_at: null,
+        has_image_limit: true,
+        plan_type: refreshCount === 1 ? "plus" : "free",
+      };
+    },
+  });
+  try {
+    // 1. UI HTML, CSS and JS contain per-account quota + 额度统计 tab and zero forbidden APIs
+    for (const label of ['data-tab="stats"', "额度统计", "当前账号", "可用账号", "限流账号", "剩余额度", "成功调用", "失败调用", "refreshStatsQuota", "statsRows"]) {
+      assert(h.html.includes(label), "missing HTML element: " + label);
+    }
+    const styleCss = await (await fetch(h.base + "assets/style.css")).text();
+    assert(styleCss.includes(".quota-pill"));
+    assert(styleCss.includes(".stats-grid"));
+    assert(styleCss.includes(".stat-card-active"));
+    const appJs = await (await fetch(h.base + "assets/app.js")).text();
+    assert(appJs.includes('api("stats")'));
+    assert(appJs.includes("quotaOnly: true"));
+    assert(appJs.includes("生图额度："));
+    assert(!appJs.includes("innerHTML"));
+    assert(!appJs.includes("localStorage"));
+
+    // 2. Auth enforcement on /api/stats
+    assert.equal((await h.api("stats", undefined, { bearer: "0".repeat(64) })).status, 403);
+    assert.equal((await h.api("stats", undefined, { origin: "https://attacker.test" })).status, 403);
+
+    // 3. Initial /api/stats & /api/accounts payload
+    const st1 = await h.api("stats");
+    assert.equal(st1.status, 200);
+    assert.equal(st1.json.summary.total, 2);
+    assert.equal(st1.json.summary.active, 1);
+    assert.equal(st1.json.summary.limited, 1);
+    assert.equal(st1.json.summary.totalQuota, 6);
+    assert.equal(st1.json.summary.totalSuccess, 1);
+    assert.equal(st1.json.summary.totalFail, 1);
+    assert.equal(st1.json.accounts[0].imageQuota, 6);
+    assert.equal(st1.json.accounts[0].quotaStatus, "available");
+    assert.equal(st1.json.accounts[1].imageQuota, 0);
+    assert.equal(st1.json.accounts[1].quotaStatus, "limited");
+    assert(!JSON.stringify(st1.json).includes(alice));
+    assert(!JSON.stringify(st1.json).includes(records[0].accessToken));
+
+    // 4. quotaOnly refresh updates both accounts via default refreshPoolAccount + injected runWorker
+    const refreshed = await h.api("accounts/refresh", { all: true, quotaOnly: true });
+    assert.equal(refreshed.status, 200);
+    assert.equal(refreshed.json.quotaChecked, 2);
+    assert.equal(refreshed.json.quotaStats.active, 2);
+    assert.equal(refreshed.json.quotaStats.limited, 0);
+    assert.equal(refreshed.json.quotaStats.totalQuota, 16);
+    assert.equal(refreshed.json.accounts[0].planType, "plus");
+
+    // 5. Removing alice cleans up per-account quota while preserving bob & totals
+    const aliceId = st1.json.accounts[0].id;
+    assert.equal((await h.api("remove", { id: aliceId })).status, 200);
+    const st2 = await h.api("stats");
+    assert.equal(st2.json.summary.total, 1);
+    assert.equal(st2.json.summary.active, 1);
+    assert.equal(st2.json.summary.totalQuota, 4);
+    assert.equal(st2.json.summary.totalSuccess, 1);
+    assert.equal(st2.json.summary.totalFail, 1);
+  } finally {
+    await h.close();
+  }
 });

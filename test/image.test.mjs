@@ -1,17 +1,24 @@
 import { strict as assert } from "node:assert";
 import { test } from "node:test";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CODEX_BASE, discoverPoolModels, poolFetch } from "../lib/codex-pool.mjs";
+import {
+  CODEX_BASE, discoverPoolModels, poolFetch, probeAccountImageQuota, refreshPoolAccount,
+} from "../lib/codex-pool.mjs";
 import {
   IMAGE_MODEL_ID,
   buildImageModelCatalog,
+  checkWebImageQuota,
   executeWebImageGeneration,
   parseImageRequest,
   runWebImageWorker,
 } from "../lib/chatgpt-web-image.mjs";
+import {
+  createInMemoryStatsStore, isAccountRateLimited, readPoolStats, recordQuotaCheck,
+  sanitizeStatsMessage, summarizePoolStats,
+} from "../lib/pool-stats.mjs";
 import { accountSlotTag, buildSlotAuthBody } from "../lib/pool-connection.mjs";
 import { GPTFreePoolPlugin } from "../index.mjs";
 
@@ -266,4 +273,171 @@ test("executeWebImageGeneration stops rotating once maxTotalMs budget is exhaust
     (err) => err.status === 503 && /transient glitch/.test(err.message),
   );
   assert.equal(calls, 1);
+});
+
+test("pool-stats persists atomically without raw emails, JWTs or URLs and tracks cooldowns", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gptfree-stats-"));
+  const statsFile = join(dir, "pool-stats.json");
+  const email = "secret-owner@example.com";
+  const secretJwt = jwt(3600, email);
+  try {
+    await recordQuotaCheck({
+      email,
+      quota: 9,
+      restoreAt: null,
+      hasImageLimit: true,
+      planType: "free",
+    }, { statsFile });
+    await recordQuotaCheck({
+      email: "broken@example.com",
+      error: `Failed fetching https://chatgpt.com/backend-api?tok=${secretJwt} for ${email}`,
+    }, { statsFile });
+
+    const raw = await readFile(statsFile, "utf8");
+    assert(!raw.includes(email));
+    assert(!raw.includes("broken@example.com"));
+    assert(!raw.includes(secretJwt));
+    assert(!raw.includes("https://chatgpt.com"));
+    assert(raw.includes(accountSlotTag(email)));
+
+    const stats = await readPoolStats({ statsFile });
+    const rows = [
+      { email, accessToken: secretJwt },
+      { email: "broken@example.com", accessToken: jwt(3600, "broken@example.com") },
+      { email: "unchecked@example.com", accessToken: jwt(3600, "unchecked@example.com") },
+    ];
+    const summary = summarizePoolStats(rows, stats);
+    assert.equal(summary.quotaStats.total, 3);
+    assert.equal(summary.quotaStats.active, 1);
+    assert.equal(summary.quotaStats.errored, 1);
+    assert.equal(summary.quotaStats.unchecked, 1);
+    assert.equal(summary.quotaStats.totalQuota, 9);
+    assert.equal(summary.accounts[0].planType, "free");
+    assert.equal(summary.accounts[1].quotaStatus, "error");
+    assert(!JSON.stringify(summary).includes("secret-owner@example.com"));
+
+    // Rate-limit expiry behavior
+    const pastIso = new Date(Date.now() - 60_000).toISOString();
+    const futureIso = new Date(Date.now() + 60_000).toISOString();
+    const store = createInMemoryStatsStore();
+    await recordQuotaCheck({ email, quota: 0, restoreAt: pastIso }, { statsStore: store });
+    const s1 = await readPoolStats({ statsStore: store });
+    assert.equal(isAccountRateLimited(email, s1), false);
+    await recordQuotaCheck({ email, quota: 0, restoreAt: futureIso }, { statsStore: store });
+    const s2 = await readPoolStats({ statsStore: store });
+    assert.equal(isAccountRateLimited(email, s2), true);
+    assert(!sanitizeStatsMessage("err https://example.com user@test.com").includes("https://"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("probeAccountImageQuota & refreshPoolAccount probe quota with 401 reauth and respect quotaOnly", async () => {
+  const acc = { email: "probe@example.com", password: "p", totp: seed, accessToken: jwt(3600, "probe@example.com") };
+  const renewedToken = jwt(3600, "probe@example.com") + "fresh";
+  const store = createInMemoryStatsStore();
+
+  let workerCalls = 0;
+  const probeRes = await probeAccountImageQuota(acc, {
+    statsStore: store,
+    reauthenticate: async (a) => ({ ...a, accessToken: renewedToken }),
+    runWorker: async (payload) => {
+      assert.equal(payload.action, "check_image_quota");
+      workerCalls++;
+      if (workerCalls === 1) {
+        return { ok: false, http_status: 401, error_code: "unauthorized", error: "expired" };
+      }
+      assert.equal(payload.access_token, renewedToken);
+      return { ok: true, quota: 14, restore_at: null, has_image_limit: true, plan_type: "plus" };
+    },
+  });
+  assert.equal(probeRes.ok, true);
+  assert.equal(probeRes.renewed, true);
+  assert.equal(probeRes.imageQuota, 14);
+  assert.equal(probeRes.planType, "plus");
+
+  const direct = await checkWebImageQuota({ accessToken: "" });
+  assert.equal(direct.ok, false);
+  assert.equal(direct.http_status, 401);
+
+  let verifyCalls = 0;
+  const quotaOnlyRes = await refreshPoolAccount(
+    { ...acc, accessToken: renewedToken },
+    {
+      quotaOnly: true,
+      statsStore: store,
+      verify: async () => { verifyCalls++; return { accepted: true }; },
+      runWorker: async () => ({ ok: true, quota: 11, restore_at: null, has_image_limit: true, plan_type: "free" }),
+    },
+  );
+  assert.equal(verifyCalls, 0);
+  assert.equal(quotaOnlyRes.quotaOk, true);
+  assert.equal(quotaOnlyRes.imageQuota, 11);
+});
+
+test("poolFetch image generation updates stats, avoids double-fail on 401 reauth, and deprioritizes rate-limited slots", async () => {
+  const accA = { email: "slotA@example.com", password: "p", totp: seed, accessToken: jwt(3600, "slotA@example.com") };
+  const accB = { email: "slotB@example.com", password: "p", totp: seed, accessToken: jwt(3600, "slotB@example.com") };
+  const renewedB = jwt(3600, "slotB@example.com") + "2";
+  const slotA = accountSlotTag(accA.email);
+  const store = createInMemoryStatsStore();
+
+  await recordQuotaCheck({ email: accA.email, quota: 5, hasImageLimit: true }, { statsStore: store });
+  await recordQuotaCheck({ email: accB.email, quota: 5, hasImageLimit: true }, { statsStore: store });
+
+  // Call 1: preferred slot A rate-limits (429), fails over to B which hits 401 -> reauth -> succeeds.
+  // Should record 1 fail (A only), 1 success (B), B quota decremented to 4, A quota marked 0 (rate limited).
+  const firstRes = await poolFetch(CODEX_BASE + "/images/generations", {
+    method: "POST",
+    body: JSON.stringify({ model: "gpt-image-2", prompt: "neon owl" }),
+  }, {
+    read: async () => [accA, accB],
+    preferredSlot: slotA,
+    statsStore: store,
+    reauthenticate: async (a) => ({ ...a, accessToken: renewedB }),
+    runWorker: async (payload) => {
+      if (payload.access_token === accA.accessToken) {
+        return { ok: false, http_status: 429, error_code: "rate_limited", error: "limit reached", retry_after: 1200 };
+      }
+      if (payload.access_token === accB.accessToken) {
+        return { ok: false, http_status: 401, error_code: "unauthorized", error: "expired" };
+      }
+      return {
+        ok: true,
+        created: 1731150000,
+        data: [{ b64_json: Buffer.from("png").toString("base64"), media_type: "image/png" }],
+      };
+    },
+  });
+  assert.equal(firstRes.status, 200);
+  const sAfterFirst = summarizePoolStats([accA, accB], await readPoolStats({ statsStore: store }));
+  assert.equal(sAfterFirst.quotaStats.limited, 1);
+  assert.equal(sAfterFirst.quotaStats.active, 1);
+  assert.equal(sAfterFirst.quotaStats.totalQuota, 4);
+  assert.equal(sAfterFirst.quotaStats.totalSuccess, 1);
+  assert.equal(sAfterFirst.quotaStats.totalFail, 1);
+
+  // Call 2: even if preferredSlot points to rate-limited A, non-limited B is tried FIRST!
+  const callOrder = [];
+  const secondRes = await poolFetch(CODEX_BASE + "/images/generations", {
+    method: "POST",
+    body: JSON.stringify({ model: "gpt-image-2", prompt: "blue sky" }),
+  }, {
+    read: async () => [accA, accB],
+    preferredSlot: slotA,
+    statsStore: store,
+    runWorker: async (payload) => {
+      callOrder.push(payload.access_token);
+      return {
+        ok: true,
+        created: 1731150001,
+        data: [{ b64_json: Buffer.from("png2").toString("base64"), media_type: "image/png" }],
+      };
+    },
+  });
+  assert.equal(secondRes.status, 200);
+  assert.deepEqual(callOrder, [accB.accessToken]);
+  const sAfterSecond = summarizePoolStats([accA, accB], await readPoolStats({ statsStore: store }));
+  assert.equal(sAfterSecond.quotaStats.totalQuota, 3);
+  assert.equal(sAfterSecond.quotaStats.totalSuccess, 2);
 });

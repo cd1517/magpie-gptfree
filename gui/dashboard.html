@@ -27,6 +27,7 @@
       <div class="tabs" role="tablist" aria-label="功能">
         <button type="button" role="tab" class="tab active" aria-selected="true" data-tab="import">批量导入</button>
         <button type="button" role="tab" class="tab" aria-selected="false" data-tab="pool">我的账号池 <span id="poolCount" class="count">—</span></button>
+        <button type="button" role="tab" class="tab" aria-selected="false" data-tab="stats">额度统计</button>
       </div>
       <section id="importPanel" class="panel" role="tabpanel">
         <div class="section-head"><h2><span class="step">01</span> 批量导入账号</h2>
@@ -120,6 +121,74 @@
           <input id="poolProxyInput" type="url" class="pool-proxy" spellcheck="false" autocomplete="off" aria-label="刷新用代理地址" placeholder="刷新代理（可选）如 http://127.0.0.1:7890">
         </div>
         <div id="poolList" class="pool-list"></div>
+      </section>
+
+      <section id="statsPanel" class="panel hidden" role="tabpanel">
+        <div class="section-head">
+          <h2>生图额度统计</h2>
+          <div class="pool-actions">
+            <button id="refreshStatsQuota" type="button" class="btn primary small">刷新全部额度</button>
+            <button id="reloadStats" type="button" class="btn secondary small">重新读取</button>
+          </div>
+        </div>
+        <p class="muted tiny">实时读取号池各账号在 ChatGPT Web 端的 <code>image_gen</code> 生图剩余额度及本机调用统计；未检测或查询失败时如实展示状态，绝不伪造数值。</p>
+        <div class="pool-toolbar">
+          <div id="statsMeta" class="pool-summary">加载中…</div>
+          <input id="statsProxyInput" type="url" class="pool-proxy" spellcheck="false" autocomplete="off" aria-label="额度检测代理地址" placeholder="检测代理（可选）如 http://127.0.0.1:7890">
+        </div>
+        <div class="stats-grid" id="statsCards" aria-label="额度统计概览">
+          <article class="stat-card">
+            <div class="stat-heading"><span>当前账号</span><span class="stat-icon" aria-hidden="true">◉</span></div>
+            <strong id="statTotalAccounts">0</strong>
+            <span class="stat-note">号池中已入池账号数</span>
+          </article>
+          <article class="stat-card stat-card-active">
+            <div class="stat-heading"><span>可用账号</span><span class="stat-icon" aria-hidden="true">✓</span></div>
+            <strong id="statActiveAccounts">0</strong>
+            <span class="stat-note">Token 有效且有剩余生图额度</span>
+          </article>
+          <article class="stat-card">
+            <div class="stat-heading"><span>限流账号</span><span class="stat-icon" aria-hidden="true">◷</span></div>
+            <strong id="statLimitedAccounts">0</strong>
+            <span class="stat-note">剩余额度为 0 或触发限流</span>
+          </article>
+          <article class="stat-card">
+            <div class="stat-heading"><span>剩余额度</span><span class="stat-icon" aria-hidden="true">▦</span></div>
+            <strong id="statTotalQuota">0</strong>
+            <span class="stat-note" id="statQuotaNote">从上游状态接口读取</span>
+          </article>
+          <article class="stat-card">
+            <div class="stat-heading"><span>成功调用</span><span class="stat-icon" aria-hidden="true">↗</span></div>
+            <strong id="statTotalSuccess">0</strong>
+            <span class="stat-note">本机累计生图成功次数</span>
+          </article>
+          <article class="stat-card">
+            <div class="stat-heading"><span>失败调用</span><span class="stat-icon" aria-hidden="true">!</span></div>
+            <strong id="statTotalFail">0</strong>
+            <span class="stat-note">本机累计生图失败次数</span>
+          </article>
+        </div>
+        <div id="statsHint" class="stats-hint hidden" role="status"></div>
+        <div class="section-head with-top">
+          <h2>账号额度明细</h2>
+          <span id="statsTableSub" class="muted tiny">点击单行「检测额度」可向 chatgpt.com 刷新该账号最新生图额度</span>
+        </div>
+        <div class="table-wrap stats-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>账号</th>
+                <th>类型</th>
+                <th>状态</th>
+                <th>剩余生图额度</th>
+                <th>成功 / 失败</th>
+                <th>最近检测</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="statsRows"></tbody>
+          </table>
+        </div>
       </section>
       <div id="notice" class="notice hidden" role="status"></div>
     </main>

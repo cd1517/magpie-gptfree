@@ -164,3 +164,42 @@ test("Magpie provider still exposes its native in-app import entry", async () =>
   assert.equal(plug.auth.methods.length, 1);
   assert.equal(plug.auth.methods[0].type, "oauth");
 });
+
+test("runBatch invokes checkQuota best-effort after saving & reporting progress without failing batch", async () => {
+  const future = jwt(Math.floor(Date.now() / 1000) + 3600);
+  const content = [
+    `q1@example.com----pw1----${seed}`,
+    `q2@example.com----pw2----${seed}----${future}`,
+  ].join("\n");
+  const events = [];
+  const quotaCalls = [];
+  const res = await runBatch({
+    file: "virtual.txt",
+    read: async () => content,
+    consent: true,
+    login: async () => ({ tokens: { access: future, refresh: "", id: "" } }),
+    verifyToken: async () => ({ accepted: true }),
+    savePool: async () => {},
+    onProgress: (ev) => {
+      if (ev.state === "added" || ev.state === "token_reused") {
+        events.push(`progress:${ev.line}`);
+      }
+    },
+    checkQuota: async (record) => {
+      quotaCalls.push(record.email);
+      events.push(`quota:${record.email}`);
+      if (record.email === "q1@example.com") {
+        throw new Error("transient chatgpt.com timeout");
+      }
+    },
+  });
+  assert.equal(res.added, 2);
+  assert.equal(res.failed.length, 0);
+  assert.deepEqual(quotaCalls, ["q1@example.com", "q2@example.com"]);
+  assert.deepEqual(events, [
+    "progress:1",
+    "quota:q1@example.com",
+    "progress:2",
+    "quota:q2@example.com",
+  ]);
+});

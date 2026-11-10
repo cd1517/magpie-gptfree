@@ -14,6 +14,7 @@
   --good-bg: #effaf5;
   --bad-bg: #fff1f2;
   --warn-bg: #fff8eb;
+  --active-card-border: #b8e6ca;
   --shadow: 0 14px 38px -25px rgba(32, 48, 82, .25);
 }
 @media (prefers-color-scheme: dark) {
@@ -31,6 +32,7 @@
     --good-bg: #173c30;
     --bad-bg: #422127;
     --warn-bg: #3b2d14;
+    --active-card-border: #2f7d57;
     --shadow: none;
   }
 }
@@ -140,23 +142,46 @@ td:first-child { font-variant-numeric: tabular-nums; color: var(--muted) }
 .pool-summary { font-size: 12.5px; font-weight: 600; color: var(--text) }
 .pool-proxy { max-width: 280px; min-width: 200px }
 .pool-list { margin-top: 12px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden }
-.account-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 15px; border-bottom: 1px solid var(--line); flex-wrap: wrap }
+.account-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 15px; border-bottom: 1px solid var(--line); flex-wrap: wrap }
 .account-row:last-child { border-bottom: 0 }
 .account-main { min-width: 210px; flex: 1 }
 .account-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap }
 .account-main strong { font-size: 13px; font-weight: 680 }
 .account-main small { display: block; font-size: 11.5px; color: var(--muted); margin-top: 3px }
-.pill { display: inline-block; font-size: 11px; font-weight: 620; border-radius: 99px; padding: 1px 8px }
+.account-side { display: flex; align-items: center; gap: 10px; flex-wrap: wrap }
+.pill { display: inline-block; font-size: 11px; font-weight: 620; border-radius: 99px; padding: 1px 8px; white-space: nowrap }
 .pill.good { background: var(--good-bg); color: var(--good) }
 .pill.warn { background: var(--warn-bg); color: var(--warn) }
 .pill.bad { background: var(--bad-bg); color: var(--bad) }
+.pill.neutral { background: var(--bg); color: var(--muted); border: 1px solid var(--line) }
+.pill.plan { background: var(--accent-weak); color: var(--accent); text-transform: uppercase; letter-spacing: .03em }
+.quota-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 650; border-radius: 99px; padding: 3px 10px; white-space: nowrap; font-variant-numeric: tabular-nums; border: 1px solid transparent }
+.quota-pill.good { background: var(--good-bg); color: var(--good); border-color: var(--active-card-border) }
+.quota-pill.bad { background: var(--bad-bg); color: var(--bad); border-color: color-mix(in srgb, var(--bad) 25%, transparent) }
+.quota-pill.warn { background: var(--warn-bg); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 25%, transparent) }
+.quota-pill.neutral { background: var(--bg); color: var(--muted); border-color: var(--line) }
 .account-buttons { display: flex; align-items: center; gap: 8px }
+
+.stats-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; margin-top: 14px }
+.stat-card { background: var(--card); border: 1px solid var(--line); border-radius: 13px; padding: 16px 18px }
+.stat-card-active { border-color: var(--active-card-border) }
+.stat-heading { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 13px }
+.stat-icon { color: var(--muted); opacity: .75; font-size: 14px }
+.stat-card strong { display: block; margin-top: 8px; color: var(--text); font-size: 28px; line-height: 1.2; font-weight: 740; letter-spacing: -.02em; font-variant-numeric: tabular-nums }
+.stat-note { display: block; color: var(--muted); font-size: 11px; margin-top: 6px }
+.stats-hint { margin-top: 14px; padding: 11px 14px; border: 1px solid color-mix(in srgb, var(--warn) 45%, transparent); background: var(--warn-bg); color: var(--warn); border-radius: 10px; font-size: 12px; line-height: 1.55 }
+.stats-table-wrap { max-height: 360px }
+.quota-num { font-weight: 700; font-variant-numeric: tabular-nums }
+.stats-empty { text-align: center; color: var(--muted); padding: 26px 12px }
 
 .empty { text-align: center; padding: 40px 24px; color: var(--muted); font-size: 13px }
 .notice { border: 1px solid var(--line); border-radius: 9px; background: var(--accent-weak); color: var(--text); font-size: 12px; padding: 11px 14px; margin-top: 16px }
 .notice.error { color: var(--bad); background: var(--bad-bg); border-color: var(--bad) }
 footer { text-align: center; margin-top: 18px; color: var(--muted); font-size: 11px }
 .hidden { display: none !important }
+@media (max-width: 720px) {
+  .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)) }
+}
 @media (max-width: 680px) {
   body { padding: 14px 13px 28px }
   .panel { padding: 16px }
@@ -166,6 +191,9 @@ footer { text-align: center; margin-top: 18px; color: var(--muted); font-size: 1
   .section-head { align-items: flex-start }
   .secure-pill { font-size: 10px }
   .inline-check { margin-left: 0 }
+}
+@media (max-width: 480px) {
+  .stats-grid { grid-template-columns: 1fr }
 }
 @media (prefers-reduced-motion: reduce) {
   .dropzone, #progressFill { transition: none }

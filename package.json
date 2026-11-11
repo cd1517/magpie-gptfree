@@ -1,6 +1,6 @@
 {
   "name": "magpie-gptfree",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "GPT号池：Magpie 多账号批量导入与号池管理插件（支持独立 HTTP 登录与画图）",
   "type": "module",
   "main": "./index.mjs",
@@ -19,7 +19,7 @@
   "scripts": {
     "test": "node --test test/*.test.mjs",
     "test:python": "python -m unittest discover -s python -p \"test_*.py\" -v",
-    "check": "node --check index.mjs && node --check lib/dsh-http-auth.mjs && node --check lib/chatgpt-web-image.mjs && node --check lib/pool-stats.mjs && node --check bin/import.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs && node --check lib/gui-service.mjs && node --check gui/app.js && node --check gui/entry.js && node --check lib/pool-connection.mjs && node --check lib/native-file-dialog.mjs && node --check lib/provider-native-signin.mjs"
+    "check": "node --check index.mjs && node --check lib/dsh-http-auth.mjs && node --check lib/chatgpt-web-image.mjs && node --check lib/chatgpt-web-text.mjs && node --check lib/pool-stats.mjs && node --check bin/import.mjs && node --check lib/importer.mjs && node --check lib/credentials.mjs && node --check lib/pool-vault.mjs && node --check lib/codex-pool.mjs && node --check lib/gui-service.mjs && node --check gui/app.js && node --check gui/entry.js && node --check lib/pool-connection.mjs && node --check lib/native-file-dialog.mjs && node --check lib/provider-native-signin.mjs"
   },
   "engines": {
     "node": ">=20"
